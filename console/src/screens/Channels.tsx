@@ -1,24 +1,28 @@
 import { QRCodeSVG } from "qrcode.react";
 
-// Экран 05 — Каналы.
-//
-// В прототипе QR декоративный: псевдослучайный LCG со seed 20260731, он не
-// сканируется. Здесь сразу настоящий, через qrcode.react — библиотека
-// названа в ТЗ прямо, согласовывать её не нужно.
+// Экран 05 — Каналы. Разметка из прототипа (секция ch) с одной заменой:
+// там QR декоративный, рисуется псевдослучайным LCG со seed 20260731 и не
+// сканируется. Здесь настоящий, через qrcode.react — библиотека названа в
+// ТЗ прямо, согласовывать её не нужно.
 const BOT = "EskhataDemoBot";
-const BOT_URL = `https://t.me/${BOT}`;
+
+const SNIPPET = `<script src="https://cdn.sorollm.tj/w.js"
+  data-ws="eskhata-demo"
+  data-lang="tg,ru"></script>`;
 
 export default function Channels() {
   return (
     <>
       <div className="head">
-        <h1>
-          Каналы <em>подключения</em>
-        </h1>
-        <p>
-          Один бот, одна база знаний, одна история переписки — сколько бы
-          каналов ни было включено.
-        </p>
+        <div>
+          <h1>
+            Каналы <em>подключения</em>
+          </h1>
+          <p>
+            Один бот, одна база знаний, одна история переписки — сколько бы
+            каналов ни было включено.
+          </p>
+        </div>
       </div>
 
       <div className="grid g3">
@@ -40,7 +44,7 @@ export default function Channels() {
             встрече, ставить ничего не нужно.
           </div>
           <div className="qrbox">
-            <QRCodeSVG value={BOT_URL} size={132} level="M" />
+            <QRCodeSVG value={`https://t.me/${BOT}`} size={132} level="M" />
           </div>
           <div
             className="mono"
@@ -53,37 +57,24 @@ export default function Channels() {
         <div className="chcard">
           <div className="chtop">
             <div className="chname">
-              <span className="chico" style={{ background: "var(--rose)" }}>
+              <span
+                className="chico"
+                style={{ background: "var(--rose)", color: "#fff" }}
+              >
                 W
               </span>
               Веб-виджет
             </div>
-            <span className="pill">
+            <span className="pill live">
               <span className="dot" />
-              Готов к встройке
+              Активен
             </span>
           </div>
           <div className="chdesc">
-            Один тег на сайт банка. Виджет живёт в iframe: стили сайта его не
-            ломают, а он не ломает сайт.
+            Одна строка в шаблон сайта. Цвета и приветствие настраиваются под
+            бренд банка.
           </div>
-          <pre
-            className="mono"
-            style={{
-              background: "var(--panel2)",
-              border: "1px solid var(--line)",
-              borderRadius: 10,
-              padding: 12,
-              fontSize: 11,
-              color: "var(--muted)",
-              overflowX: "auto",
-              margin: 0,
-            }}
-          >
-{`<script src="${location.origin}/widget/loader.js"
-        data-workspace="eskhata-demo"
-        defer></script>`}
-          </pre>
+          <div className="snippet">{SNIPPET}</div>
         </div>
 
         <div className="chcard">
@@ -94,7 +85,7 @@ export default function Channels() {
               </span>
               WhatsApp
             </div>
-            <span className="pill">
+            <span className="pill wait">
               <span className="dot" />
               Песочница Meta
             </span>

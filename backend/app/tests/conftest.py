@@ -56,6 +56,29 @@ async def session(db_engine):
 
 
 @pytest_asyncio.fixture
+async def demo_workspace(session) -> Workspace:
+    """Воркспейс из `.env` — с ним работают API и ядро по умолчанию.
+
+    Ищем существующий: slug уникален, а в базе разработки этот воркспейс
+    уже есть. Создаём только если базы коснулись впервые.
+    """
+    from sqlalchemy import select
+
+    from app.config import settings
+
+    workspace = await session.scalar(
+        select(Workspace).where(Workspace.slug == settings.WORKSPACE_DEFAULT_SLUG)
+    )
+    if workspace is None:
+        workspace = Workspace(
+            slug=settings.WORKSPACE_DEFAULT_SLUG, name="Банк Эсхата"
+        )
+        session.add(workspace)
+        await session.flush()
+    return workspace
+
+
+@pytest_asyncio.fixture
 async def workspace(session) -> Workspace:
     """Свой воркспейс на каждый тест — чтобы тесты не видели данные друг друга."""
     workspace = Workspace(slug="test-ws", name="Тестовый банк")

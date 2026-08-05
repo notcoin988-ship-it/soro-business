@@ -33,3 +33,53 @@ export async function login(password: string): Promise<void> {
 
 // Дальше по мере готовности бэкенда: documents, playground, inbox,
 // analytics, подписка на /ws/inbox.
+
+// --- база знаний (экран 02) ---
+
+export type DocKind = "pdf" | "docx" | "xlsx" | "web";
+export type DocStatus = "queued" | "indexing" | "ready" | "failed";
+
+export interface Doc {
+  id: number;
+  kind: DocKind;
+  title: string;
+  status: DocStatus;
+  source_url: string | null;
+  pages: number | null;
+  chunks: number;
+  chunks_done: number;
+  chunks_total: number;
+  error: string | null;
+}
+
+export function listDocuments(): Promise<Doc[]> {
+  return request<Doc[]>("/documents");
+}
+
+export async function uploadFile(file: File): Promise<Doc> {
+  const form = new FormData();
+  form.append("file", file);
+  // Content-Type не ставим руками: браузер сам добавит boundary для multipart
+  const response = await fetch(`${API_BASE}/documents`, {
+    method: "POST",
+    credentials: "include",
+    body: form,
+  });
+  if (!response.ok) throw new ApiError(response.status, await response.text());
+  return (await response.json()) as Doc;
+}
+
+export function addSite(url: string): Promise<Doc> {
+  return request<Doc>("/documents", {
+    method: "POST",
+    body: JSON.stringify({ url }),
+  });
+}
+
+export async function deleteDocument(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE}/documents/${id}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  if (!response.ok) throw new ApiError(response.status, await response.text());
+}

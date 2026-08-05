@@ -1,21 +1,209 @@
-"""Эндпоинты консоли — экраны 01-07 (раздел 9 и приложение А ТЗ).
+"""Эндпоинты консоли — база знаний (раздел 6.1 и приложение А ТЗ).
 
-ОТВЕТСТВЕННОСТЬ: всё, что запрашивает React-консоль.
+ГЛАВНОЕ ПРАВИЛО 6.1: индексация НИКОГДА не идёт внутри HTTP-запроса.
+Файл сохраняется, документ создаётся со статусом `queued`, задача уходит в
+RQ, ответ возвращается сразу. Иначе загрузка 40-страничного PDF повесит
+запрос на две минуты, а браузер отвалится по таймауту раньше.
 
-СОСТАВ:
-  POST   /api/documents        загрузка файла или ссылки → очередь RQ,
-                               ответ отдаётся СРАЗУ, индексация в фоне;
-  GET    /api/documents        список для экрана 02 со статусом и прогрессом;
-  DELETE /api/documents/{id}   удаление вместе с чанками (ON DELETE CASCADE);
-  POST   /api/playground/ask   «Площадка»: ответ + фрагменты со score
-                               и телеметрией — это и есть «стеклянный ящик»;
-  GET    /api/analytics        пять SQL приложения Б, экран 07;
-  GET    /api/settings         тон, приветствие, языки воркспейса.
-
-ПРАВИЛО РАЗДЕЛА 6.1: индексация НИКОГДА не идёт внутри HTTP-запроса.
-Файл кладётся в `/data/uploads/{workspace}/{uuid}.{ext}`, документ
-создаётся со статусом `queued`, дальше работает воркер.
-
-ЗАВИСИМОСТИ: models, ingest.worker (постановка задачи), core.rag.
-СТАТУС: не реализовано.
+Состав:
+  POST   /api/documents        файл (multipart) или {"url": "..."} для сайта
+  GET    /api/documents        список для экрана 02 со статусом и прогрессом
+  DELETE /api/documents/{id}   удаление вместе с фрагментами (ON DELETE CASCADE)
 """
+
+from __future__ import annotations
+
+import uuid
+from pathlib import Path
+
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
+from pydantic import BaseModel
+from redis import Redis
+from rq import Queue
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import settings
+from app.core.dialog import get_workspace
+from app.db import get_session
+from app.models import Chunk, Document
+
+router = APIRouter(prefix="/api", tags=["console"])
+
+# Разрешённые типы — те же, что в CHECK `documents.kind`.
+SUFFIX_TO_KIND = {".pdf": "pdf", ".docx": "docx", ".xlsx": "xlsx"}
+QUEUE_NAME = "ingest"
+INGEST_TASK = "app.ingest.worker.ingest_document"
+# Индексация большого PDF со сканами идёт минутами — очередь не должна
+# считать задачу зависшей.
+JOB_TIMEOUT = 3600
+
+
+class DocumentIn(BaseModel):
+    url: str
+
+
+class DocumentOut(BaseModel):
+    id: int
+    kind: str
+    title: str
+    status: str
+    source_url: str | None = None
+    pages: int | None = None
+    chunks: int = 0
+    chunks_done: int = 0
+    chunks_total: int = 0
+    error: str | None = None
+
+
+def enqueue(document_id: int) -> None:
+    """Поставить индексацию в очередь.
+
+    Вынесено в функцию, чтобы тесты подменяли её одной строкой и не
+    поднимали Redis ради проверки HTTP-слоя.
+    """
+    queue = Queue(QUEUE_NAME, connection=Redis.from_url(settings.REDIS_URL))
+    queue.enqueue(INGEST_TASK, document_id, job_timeout=JOB_TIMEOUT)
+
+
+async def _create(
+    session: AsyncSession,
+    *,
+    kind: str,
+    title: str,
+    source_url: str | None = None,
+    file_path: str | None = None,
+) -> Document:
+    workspace = await get_workspace(session)
+    document = Document(
+        workspace_id=workspace.id,
+        kind=kind,
+        title=title,
+        source_url=source_url,
+        file_path=file_path,
+        status="queued",
+    )
+    session.add(document)
+    await session.commit()
+    enqueue(document.id)
+    return document
+
+
+@router.post("/documents", response_model=DocumentOut, status_code=201)
+async def add_document(
+    request: Request,
+    file: UploadFile | None = File(None),
+    session: AsyncSession = Depends(get_session),
+) -> DocumentOut:
+    """Загрузка файла или ссылки на сайт. Ответ отдаётся сразу."""
+    if file is not None and file.filename:
+        suffix = Path(file.filename).suffix.lower()
+        kind = SUFFIX_TO_KIND.get(suffix)
+        if kind is None:
+            raise HTTPException(
+                status_code=415,
+                detail=f"{suffix or 'файл без расширения'}: принимаем pdf, docx, xlsx",
+            )
+
+        workspace = await get_workspace(session)
+        folder = Path(settings.UPLOAD_DIR) / workspace.slug
+        folder.mkdir(parents=True, exist_ok=True)
+        # имя на диске — uuid: в именах банковских файлов бывают пробелы,
+        # кириллица и нормализация NFD, на которой ломаются ссылки
+        path = folder / f"{uuid.uuid4()}{suffix}"
+        path.write_bytes(await file.read())
+
+        document = await _create(
+            session,
+            kind=kind,
+            title=Path(file.filename).stem,
+            file_path=str(path),
+        )
+        return await _to_out(session, document)
+
+    # не multipart — значит ссылка на сайт
+    try:
+        payload = DocumentIn.model_validate(await request.json())
+    except Exception:
+        raise HTTPException(
+            status_code=422,
+            detail='нужен файл (multipart) или JSON вида {"url": "https://..."}',
+        ) from None
+
+    if not payload.url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=422, detail="url должен начинаться с http(s)")
+
+    document = await _create(
+        session,
+        kind="web",
+        title=payload.url,
+        source_url=payload.url,
+    )
+    return await _to_out(session, document)
+
+
+@router.get("/documents", response_model=list[DocumentOut])
+async def list_documents(
+    session: AsyncSession = Depends(get_session),
+) -> list[DocumentOut]:
+    """Список для экрана 02. Консоль опрашивает его, пока есть незавершённые."""
+    workspace = await get_workspace(session)
+    documents = (
+        await session.scalars(
+            select(Document)
+            .where(Document.workspace_id == workspace.id)
+            .order_by(Document.id.desc())
+        )
+    ).all()
+    return [await _to_out(session, d) for d in documents]
+
+
+# response_model=None нужен явно: из аннотации `-> None` FastAPI выводит
+# модель ответа NoneType, а она считается телом — и 204 не проходит проверку
+# «у этого кода тела быть не должно»
+@router.delete(
+    "/documents/{document_id}",
+    status_code=204,
+    response_class=Response,
+    response_model=None,
+)
+async def delete_document(
+    document_id: int, session: AsyncSession = Depends(get_session)
+) -> None:
+    document = await session.get(Document, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="документ не найден")
+
+    # файл с диска убираем сами: ON DELETE CASCADE знает только про строки
+    if document.file_path:
+        Path(document.file_path).unlink(missing_ok=True)
+
+    await session.delete(document)
+    await session.commit()
+
+
+async def _to_out(session: AsyncSession, document: Document) -> DocumentOut:
+    chunks = await session.scalar(
+        select(func.count()).select_from(Chunk).where(Chunk.document_id == document.id)
+    )
+    progress = document.settings or {}
+    return DocumentOut(
+        id=document.id,
+        kind=document.kind,
+        title=document.title,
+        status=document.status,
+        source_url=document.source_url,
+        pages=document.pages,
+        chunks=chunks or 0,
+        chunks_done=progress.get("chunks_done", 0),
+        chunks_total=progress.get("chunks_total", 0),
+        error=document.error,
+    )

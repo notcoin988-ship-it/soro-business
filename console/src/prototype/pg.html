@@ -1,0 +1,34 @@
+<div class="head">
+          <div>
+            <h1>Площадка · <em>стеклянный ящик</em></h1>
+            <p>Слева — что видит клиент. Справа — что происходит внутри: какие фрагменты нашлись, насколько подходят и сколько заняло. Эту панель показывайте ИТ-службе и безопасности.</p>
+          </div>
+        </div>
+
+        <div class="pg">
+          <div class="chat">
+            <div class="chatbar">
+              <span class="pill live"><span class="dot"></span>Soro-27B · FP8</span>
+              <span style="color:var(--muted2)">·</span>
+              <span>База знаний: Банк Эсхата</span>
+            </div>
+            <div class="chatlog" id="log">
+              <div class="empty">Выберите вопрос ниже —<br>ответ печатается вживую, а справа виден разбор поиска.</div>
+            </div>
+            <div class="asks" id="asks">
+              <button data-q="0">Вопрос на таджикском</button>
+              <button data-q="1">Вопрос на русском</button>
+              <button data-q="2">Смешанный язык</button>
+              <button data-q="3" class="danger">Вопроса нет в базе</button>
+            </div>
+          </div>
+
+          <div class="glass">
+            <div class="glasshead">
+              <div><b>Что нашлось в документах</b><small>фрагменты, переданные модели</small></div>
+              <div class="stagechip" id="stage">ожидание</div>
+            </div>
+            <div class="glassbody" id="frags"><div class="empty">Пока пусто.</div></div>
+            <div class="telemetry" id="tel"></div>
+          </div>
+        </div>
