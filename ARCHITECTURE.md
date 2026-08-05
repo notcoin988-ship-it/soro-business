@@ -16,7 +16,7 @@
 ```
 soro-business/
 ├── docker-compose.yml              готово   5 сервисов раздела 3.3
-├── docker-compose.override.yml     локальный, в .gitignore (report.md, п. 22)
+├── docker-compose.override.yml     локальный, в .gitignore
 ├── .env.example                    готово   без единого секрета
 ├── .gitattributes                  готово   eol=lf, иначе CRLF ломает diff
 │
@@ -78,23 +78,12 @@ soro-business/
 ├── scripts/                        инструменты, не входящие в продукт
 │   ├── bench_index.py              замер индексации
 │   ├── crawl_site.py               боевой обход одного сайта
-│   ├── crawl_many.py               обход нескольких банков
-│   ├── stress_crawl.py             нагрузочный прогон на 1000 страниц
-│   ├── check_real_pdf.py           парсер на реальных PDF банка
-│   ├── make_golden_template.py     таблица для менеджера
-│   ├── golden_from_xlsx.py         таблица → golden.yaml
-│   └── check-3.4.ps1               чек-лист окружения
+│   └── stress_crawl.py             нагрузочный прогон на 1000 страниц
 │
 ├── tests/
 │   └── golden.yaml                 60 вопросов, черновик
 │
-├── logs/                           сырые логи прогонов (критерии сдачи
-│                                   требуют «показать лог», а не пересказ)
-│
-├── ARCHITECTURE.md                 этот файл
-├── report.md                       отклонения от ТЗ и принятые решения
-├── WALKTHROUGH-week2.md            разбор кода ingest построчно
-└── golden-set-brief.md             задание менеджеру по продажам
+└── ARCHITECTURE.md                 этот файл
 ```
 
 ---
@@ -161,10 +150,10 @@ soro-business/
 
 ## Нерешённые вопросы, влияющие на архитектуру
 
-| Вопрос | Где описан | Влияет на |
-|---|---|---|
-| `chunks.page INT` против «URL-хвоста» для сайта | report.md, п. 12 | `ingest/worker.py`, ссылки в ответах |
-| модель на сервере не `soro-27b-fp8` | report.md, п. 8 | `core/llm.py`, `.env` |
-| у банка почти нет таджикских документов | report.md, п. 18 | демо целиком |
-| норматив «40 страниц < 3 минут» не держится на сканах | report.md, п. 16 | GPU-образ TEI |
-| сайты на JavaScript краулер не видит | report.md, п. 21 | подключение новых банков |
+| Вопрос | Влияет на |
+|---|---|
+| `chunks.page INT` против «URL-хвоста» для сайта | `ingest/worker.py`, ссылки в ответах |
+| модель на сервере не `soro-27b-fp8`, а `zehnlab/SoroLLM-27B-Instruct-GPTQ-int4` | `core/llm.py`, `.env` |
+| у банка почти нет таджикских документов, а демо на таджикском | демо целиком |
+| норматив «40 страниц < 3 минут» не держится на сканах (8,1 сек/стр. OCR) | GPU-образ TEI |
+| сайты на JavaScript краулер не видит (httpx не выполняет скрипты) | подключение новых банков |

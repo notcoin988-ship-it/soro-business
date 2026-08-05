@@ -14,11 +14,11 @@
  7. любая ошибка → `status='failed'`, текст в `documents.error`.
 
 ПРОГРЕСС: `chunks_done`/`chunks_total` в `documents.settings` — этого поля
-нет в DDL раздела 5, оно добавлено нами (report.md, п. 1), но требуется
+нет в DDL раздела 5, оно добавлено нами, но требуется
 экраном 02.
 
 НЕРЕШЁННЫЙ ВОПРОС: `chunks.page` объявлен `INT`, а для сайта туда нужен
-«URL-хвост» (report.md, п. 12). Предлагаемый вариант — по строке
+«URL-хвост». Предлагаемый вариант — по строке
 `documents` на каждую страницу сайта, `page = NULL`, URL в `source_url`.
 
 ЗАВИСИМОСТИ: parsers, crawler, chunker, models, Redis.

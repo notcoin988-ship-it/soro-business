@@ -15,8 +15,8 @@
 * маркер `[ESCALATE]` в ответе вырезается, текст без него уходит клиенту,
   а эскалация запускается с причиной `pii_topic` или `no_answer`.
 
-ОТКЛОНЕНИЕ, ТРЕБУЮЩЕЕ РЕШЕНИЯ: ТЗ фиксирует модель `soro-27b-fp8`, а
-сервер отдаёт `zehnlab/SoroLLM-27B-Instruct-GPTQ-int4` (см. report.md, п. 8).
+ОТКЛОНЕНИЕ: ТЗ фиксирует модель `soro-27b-fp8`, а сервер отдаёт
+`zehnlab/SoroLLM-27B-Instruct-GPTQ-int4` — брать имя из `SORO_MODEL`.
 
 ЗАВИСИМОСТИ: `SORO_API_URL`, `SORO_API_KEY`, `core.pii`.
 СТАТУС: не реализовано.
