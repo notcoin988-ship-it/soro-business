@@ -20,6 +20,20 @@ WS = "test-ws"
 CARD = "5058123456789012"
 
 
+async def count(session, model, workspace, *extra):
+    """Счётчик строк ТОЛЬКО своего воркспейса.
+
+    Считать по всей таблице нельзя: база общая с разработкой, и данные,
+    оставленные руками через scripts/chat.py, ломали бы тесты. Тест обязан
+    зависеть только от того, что сделал он сам.
+    """
+    return await session.scalar(
+        select(func.count())
+        .select_from(model)
+        .where(model.workspace_id == workspace.id, *extra)
+    )
+
+
 async def send(session, text: str, *, channel="telegram", external_id="tg-1"):
     return await handle_incoming(
         session,
@@ -38,10 +52,8 @@ async def send(session, text: str, *, channel="telegram", external_id="tg-1"):
 async def test_first_message_creates_contact_and_identity(session, workspace):
     await send(session, "Салом!")
 
-    contacts = await session.scalar(select(func.count()).select_from(Contact))
-    identities = await session.scalar(
-        select(func.count()).select_from(ChannelIdentity)
-    )
+    contacts = await count(session, Contact, workspace)
+    identities = await count(session, ChannelIdentity, workspace)
     assert contacts == 1
     assert identities == 1
 
@@ -51,7 +63,7 @@ async def test_same_sender_reuses_contact(session, workspace):
     await send(session, "Салом!")
     await send(session, "Фоиз чанд аст?")
 
-    contacts = await session.scalar(select(func.count()).select_from(Contact))
+    contacts = await count(session, Contact, workspace)
     assert contacts == 1
 
 
@@ -67,7 +79,7 @@ async def test_different_channels_are_different_contacts_until_linked(
     await send(session, "Салом!", channel="telegram", external_id="tg-1")
     await send(session, "Салом!", channel="widget", external_id="w-1")
 
-    contacts = await session.scalar(select(func.count()).select_from(Contact))
+    contacts = await count(session, Contact, workspace)
     assert contacts == 2
 
 
@@ -81,9 +93,7 @@ async def test_one_conversation_per_contact(session, workspace):
     second = await send(session, "Боз як савол")
 
     assert first.conversation_id == second.conversation_id
-    conversations = await session.scalar(
-        select(func.count()).select_from(Conversation)
-    )
+    conversations = await count(session, Conversation, workspace)
     assert conversations == 1
 
 
@@ -91,7 +101,11 @@ async def test_messages_are_stored_both_sides(session, workspace):
     await send(session, "Фоизи амонат чанд аст?")
 
     roles = (
-        await session.scalars(select(Message.role).order_by(Message.id))
+        await session.scalars(
+            select(Message.role)
+            .where(Message.workspace_id == workspace.id)
+            .order_by(Message.id)
+        )
     ).all()
     assert roles == ["user", "assistant"]
 
@@ -108,7 +122,9 @@ async def test_original_in_text_mask_in_text_masked(session, workspace):
     await send(session, f"Корти ман {CARD} кор намекунад")
 
     incoming = await session.scalar(
-        select(Message).where(Message.role == "user").order_by(Message.id)
+        select(Message)
+        .where(Message.workspace_id == workspace.id, Message.role == "user")
+        .order_by(Message.id)
     )
     assert CARD in incoming.text
     assert CARD not in incoming.text_masked
@@ -155,7 +171,9 @@ async def test_operator_request_switches_conversation(session, workspace):
     reply = await send(session, "Оператор лозим")
 
     assert reply.escalated is True
-    conversation = await session.scalar(select(Conversation))
+    conversation = await session.scalar(
+        select(Conversation).where(Conversation.workspace_id == workspace.id)
+    )
     assert conversation.status == "operator"
 
 
@@ -169,9 +187,7 @@ async def test_bot_is_silent_while_operator_works(session, workspace):
     reply = await send(session, "Ало, ҳастед?")
 
     assert reply is None
-    user_messages = await session.scalar(
-        select(func.count()).select_from(Message).where(Message.role == "user")
-    )
+    user_messages = await count(session, Message, workspace, Message.role == "user")
     assert user_messages == 2
 
 
@@ -185,7 +201,9 @@ async def test_latency_is_recorded(session, workspace):
     reply = await send(session, "Салом")
 
     answer = await session.scalar(
-        select(Message).where(Message.role == "assistant").order_by(Message.id.desc())
+        select(Message)
+        .where(Message.workspace_id == workspace.id, Message.role == "assistant")
+        .order_by(Message.id.desc())
     )
     assert answer.latency_ms is not None
     assert answer.latency_ms == reply.latency_ms
