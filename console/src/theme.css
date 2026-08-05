@@ -1,0 +1,149 @@
+/* Тема из прототипа soro-business-console-2.html.
+   Правило раздела 9 буквальное: повторять попиксельно, ничего не улучшать
+   от себя. Переменные скопированы дословно — если тронуть здесь, разъедется
+   везде. */
+:root {
+  --ink: #110710;
+  --panel: #1b0f16;
+  --panel2: #241420;
+  --raise: #2e1a28;
+  --line: #3c2233;
+  --line-soft: #2b1826;
+  --rose: #e8506b;
+  --rose-hi: #ff6e88;
+  --rose-dim: #93273c;
+  --rose-wash: rgba(232, 80, 107, 0.1);
+  --brass: #dca84c;
+  --brass-wash: rgba(220, 168, 76, 0.11);
+  --paper: #f9eff1;
+  --muted: #ae9099;
+  --muted2: #7a5d67;
+  --ok: #5fc79e;
+  --tg: #2aabee;
+  --wa: #25d366;
+  --r: 12px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: Onest, system-ui, sans-serif;
+  font-weight: 300;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, .stat { font-family: Unbounded, sans-serif; font-weight: 500; }
+.mono { font-family: "JetBrains Mono", monospace; }
+em { color: var(--rose); font-style: normal; }
+
+/* --- каркас: боковая навигация + рабочая область --- */
+.shell { display: grid; grid-template-columns: 232px 1fr; min-height: 100vh; }
+
+.side {
+  background: var(--panel);
+  border-right: 1px solid var(--line-soft);
+  padding: 22px 14px;
+}
+.brand {
+  font-family: Unbounded, sans-serif;
+  font-size: 15px;
+  padding: 0 10px 18px;
+  letter-spacing: 0.2px;
+}
+.nav { display: flex; flex-direction: column; gap: 2px; }
+.nav button {
+  display: flex; align-items: center; gap: 10px;
+  background: none; border: 0; cursor: pointer;
+  color: var(--muted); font: inherit; font-size: 14px;
+  padding: 9px 10px; border-radius: 10px; text-align: left; width: 100%;
+}
+.nav button:hover { background: var(--panel2); color: var(--paper); }
+.nav button.on { background: var(--rose-wash); color: var(--paper); }
+.nav .num {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px; color: var(--muted2); min-width: 18px;
+}
+.nav button.on .num { color: var(--rose); }
+
+.work { padding: 28px 32px 48px; overflow-y: auto; }
+.head { margin-bottom: 22px; }
+.head h1 { font-size: 22px; margin: 0 0 6px; }
+.head p { color: var(--muted); font-size: 14px; margin: 0; max-width: 780px; line-height: 1.5; }
+
+/* --- сетки и карточки --- */
+.grid { display: grid; gap: 14px; }
+.g3 { grid-template-columns: repeat(3, 1fr); }
+.g4 { grid-template-columns: repeat(4, 1fr); }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+  padding: 16px;
+}
+.eyebrow {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted2); margin-bottom: 10px;
+}
+.stat { font-size: 26px; line-height: 1.1; }
+.stat.rose { color: var(--rose); }
+.stat.brass { color: var(--brass); }
+.substat { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.spark { margin-top: 12px; display: block; }
+
+/* --- каналы, экран 05 --- */
+.chcard {
+  background: var(--panel); border: 1px solid var(--line-soft);
+  border-radius: var(--r); padding: 16px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.chtop { display: flex; align-items: center; justify-content: space-between; }
+.chname { display: flex; align-items: center; gap: 9px; font-size: 15px; }
+.chico {
+  width: 26px; height: 26px; border-radius: 7px;
+  display: grid; place-items: center;
+  font-size: 11px; font-weight: 600; color: #08131a;
+  font-family: "JetBrains Mono", monospace;
+}
+.chdesc { color: var(--muted); font-size: 13px; line-height: 1.5; }
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; padding: 3px 9px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--muted);
+}
+.pill.live { color: var(--ok); border-color: rgba(95, 199, 158, 0.35); }
+.pill .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.qrbox {
+  background: var(--paper); border-radius: 10px; padding: 12px;
+  display: grid; place-items: center;
+}
+
+/* --- заглушка неготового экрана --- */
+.soon {
+  border: 1px dashed var(--line); border-radius: var(--r);
+  padding: 40px; text-align: center; color: var(--muted2); font-size: 14px;
+}
+
+/* --- вход --- */
+.login { min-height: 100vh; display: grid; place-items: center; }
+.login form {
+  background: var(--panel); border: 1px solid var(--line-soft);
+  border-radius: var(--r); padding: 28px; width: 320px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.login h1 { font-size: 18px; margin: 0 0 4px; }
+.login p { color: var(--muted); font-size: 13px; margin: 0 0 8px; }
+.login input {
+  background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 9px; padding: 10px 12px; color: var(--paper); font: inherit;
+}
+.login input:focus { outline: none; border-color: var(--rose-dim); }
+.login button {
+  background: var(--rose); border: 0; border-radius: 9px;
+  padding: 10px 12px; color: #fff; font: inherit; font-weight: 500; cursor: pointer;
+}
+.login button:hover { background: var(--rose-hi); }
+.login .err { color: var(--rose-hi); font-size: 12px; min-height: 16px; }
