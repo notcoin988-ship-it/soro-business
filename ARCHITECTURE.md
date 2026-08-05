@@ -66,10 +66,11 @@ soro-business/
 │   ├── package.json                готово
 │   └── src/
 │       ├── ARCHITECTURE.md         карта 7 экранов
-│       ├── screens/                заглушка 01-07
-│       ├── components/             заглушка общее
-│       └── lib/                    заглушка api.ts — единственное место,
-│                                   знающее адреса бэкенда
+│       ├── screens/                заглушка Overview, Knowledge, Playground,
+│       │                           Omni, Channels, Inbox, Analytics
+│       ├── components/             заглушка общее: KPI, бейджи источников
+│       └── lib/api.ts              заглушка единственное место, знающее
+│                                   адреса бэкенда
 │
 ├── widget/
 │   ├── loader.js                   заглушка то, что вставляет банк (< 5 КБ)
