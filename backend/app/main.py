@@ -1,15 +1,18 @@
 """Создание FastAPI-приложения (раздел 2.3 ТЗ).
 
-Пока здесь только каркас и /health — роутеры разделов 7–9 подключаются по мере
-готовности. Файл нужен, чтобы контейнер backend поднимался и проходила
-проверка №1 чек-листа 3.4.
+Здесь собирается приложение: /health и роутеры каналов. Логики нет и не
+должно быть — она в core/.
 """
 
 from fastapi import FastAPI
 
+from app.channels import telegram
 from app.config import settings
 
 app = FastAPI(title="Soro Business Console", version="1.0.0")
+
+# Каналы подключаются по мере готовности. Telegram первый — раздел 7.1.
+app.include_router(telegram.router)
 
 
 @app.get("/health")
