@@ -182,7 +182,7 @@ class Document(Base):
         TZ, nullable=False, server_default=func.now()
     )
     indexed_at: Mapped[datetime | None] = mapped_column(TZ)
-    # ОТКЛОНЕНИЕ ОТ DDL (см. NOTES-otkloneniya.md, п.1): раздел 9 требует
+    # ОТКЛОНЕНИЕ ОТ DDL: раздел 9 требует
     # прогресс-бар индексации «из поля chunks_done/chunks_total
     # в documents.settings», но в DDL раздела 5 такой колонки нет.
     settings: Mapped[dict] = mapped_column(
