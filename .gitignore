@@ -1,0 +1,31 @@
+# секреты — правило 10.1: любой секрет в git это инцидент
+.env
+*.env
+!.env.example
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# node
+node_modules/
+dist/
+.vite/
+
+# данные и загрузки
+/data/
+uploads/
+
+# ide / os
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# локальные настройки машины разработчика (см. report.md, п. 22)
+docker-compose.override.yml

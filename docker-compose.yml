@@ -1,0 +1,46 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: soro
+      POSTGRES_PASSWORD: soro
+      POSTGRES_DB: soro
+    volumes: [ "pgdata:/var/lib/postgresql/data" ]
+    ports: [ "5432:5432" ]
+
+  redis:
+    image: redis:7-alpine
+    ports: [ "6379:6379" ]
+
+  embeddings:
+    # ОТКЛОНЕНИЕ ОТ ТЗ (раздел 3.3): в документе зафиксирован тег cpu-1.5.
+    # Он нерабочий: внутри hf-hub 0.3.2, а Hugging Face сейчас отвечает на
+    # /resolve/main/ редиректом 307 с ОТНОСИТЕЛЬНЫМ Location. Старая библиотека
+    # такое не разбирает и падает с «relative URL without a base», модель не
+    # скачивается вообще. Требует решения тимлида: оставить cpu-latest или
+    # подложить веса bge-m3 в volume вручную, сохранив исходный тег.
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    command: --model-id BAAI/bge-m3 --max-batch-tokens 16384
+    ports: [ "8080:80" ]
+    volumes: [ "teidata:/data" ]
+    # на сервере с GPU заменить образ на ...:1.5 (cuda) — станет в ~20x быстрее
+
+  backend:
+    build: ./backend
+    env_file: .env
+    depends_on: [ db, redis, embeddings ]
+    ports: [ "8000:8000" ]
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    # ОТКЛОНЕНИЕ ОТ ТЗ (неделя 2): ./scripts смонтирован в контейнер, иначе
+    # scripts/bench_index.py и будущий scripts/eval_rag.py (неделя 3) негде
+    # запускать — все зависимости стоят только внутри образа.
+    volumes: [ "./backend:/code", "./scripts:/code/scripts", "uploads:/data/uploads" ]
+
+  worker:
+    build: ./backend
+    env_file: .env
+    depends_on: [ db, redis, embeddings ]
+    command: rq worker ingest --url redis://redis:6379/0
+    volumes: [ "./backend:/code", "uploads:/data/uploads" ]
+
+volumes: { pgdata: {}, teidata: {}, uploads: {} }
