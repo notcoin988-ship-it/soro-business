@@ -168,6 +168,61 @@ async def test_delete_unknown_document_is_404(client):
 
 
 # ---------------------------------------------------------------------------
+# удаление сайта целиком (экран 02: страницы обхода свёрнуты в одну строку)
+# ---------------------------------------------------------------------------
+
+
+async def _add_page(session, workspace, url: str) -> Document:
+    document = Document(
+        workspace_id=workspace.id,
+        kind="web",
+        title=url,
+        source_url=url,
+        status="ready",
+    )
+    session.add(document)
+    await session.commit()
+    return document
+
+
+async def test_delete_site_removes_all_its_pages(client, session, demo_workspace):
+    """Обход даёт по строке на страницу — сносим их одним запросом.
+
+    Иначе консоль шлёт полторы сотни DELETE подряд.
+    """
+    for path in ("/", "/tarify/", "/about/"):
+        await _add_page(session, demo_workspace, f"https://bank.tj{path}")
+    other = await _add_page(session, demo_workspace, "https://other.tj/")
+
+    response = await client.delete("/api/documents", params={"host": "bank.tj"})
+
+    assert response.status_code == 200
+    assert response.json() == {"deleted": 3}
+    # чужой сайт не задет
+    assert await session.get(Document, other.id) is not None
+
+
+async def test_delete_site_matches_host_exactly(client, session, demo_workspace):
+    """Хост сравнивается разобранным, а не подстрокой.
+
+    `LIKE '%bank.tj%'` снёс бы заодно `bank.tj.evil.com` — а это чужой
+    сайт, который кто-то мог добавить намеренно.
+    """
+    victim = await _add_page(session, demo_workspace, "https://bank.tj.evil.com/x")
+    await _add_page(session, demo_workspace, "https://bank.tj/")
+
+    response = await client.delete("/api/documents", params={"host": "bank.tj"})
+
+    assert response.json() == {"deleted": 1}
+    assert await session.get(Document, victim.id) is not None
+
+
+async def test_delete_site_unknown_host_is_404(client):
+    response = await client.delete("/api/documents", params={"host": "нет-такого.tj"})
+    assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # воркер: настоящая индексация с настоящими эмбеддингами
 # ---------------------------------------------------------------------------
 

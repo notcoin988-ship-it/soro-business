@@ -29,8 +29,23 @@
    надпись средствами браузера, и она берётся из локали системы: на
    китайской сборке Windows это «选择文件». Ни перевести, ни заменить её
    из CSS нельзя — только спрятать поле и открывать диалог по кнопке
-   «Загрузить документы», как и нарисовано в эталоне. */
-.file { display: none; }
+   «Загрузить документы», как и нарисовано в эталоне.
+
+   НЕ display:none: такой элемент часть браузеров считает неактивным и
+   активацию по <label> игнорирует — диалог не открывается вовсе. Прячем
+   общепринятым для доступности способом: элемент остаётся в потоке и
+   кликабельным, но его не видно. */
+.file {
+  position: absolute; width: 1px; height: 1px;
+  opacity: 0; overflow: hidden; clip-path: inset(50%);
+}
+
+/* <label> в роли кнопки. У .btn в эталоне display не задан — у кнопки он
+   inline-block по умолчанию, у label нет, и без этого правила высота
+   уезжает относительно соседних кнопок. */
+.aslabel { display: inline-block; user-select: none; }
+/* у <label> нет атрибута disabled — гасим классом */
+.aslabel.off { pointer-events: none; opacity: .5; }
 
 .fail { color: var(--rose-hi); font-size: 12px; }
 .linkbtn {
@@ -38,3 +53,38 @@
   font-size: 11.5px; cursor: pointer; padding: 0;
 }
 .linkbtn:hover { color: var(--rose-hi); }
+
+/* --- таблица базы знаний: корзина, шеврон, страницы сайта --- */
+
+/* Кнопка-иконка. Цвет задаётся здесь, а сама иконка рисуется
+   currentColor — поэтому наведение и блокировка работают без правил
+   для svg. */
+.iconbtn {
+  background: none; border: 0; padding: 4px; cursor: pointer;
+  color: var(--muted2); display: inline-flex; border-radius: 6px;
+  transition: color .13s, background .13s;
+}
+.iconbtn:hover { color: var(--rose-hi); background: var(--raise); }
+.iconbtn:disabled { opacity: .4; cursor: default; background: none; }
+.iconbtn:disabled:hover { color: var(--muted2); }
+
+/* Шеврон группы. Рисуем тем же приёмом, что и эталон в .ols::after —
+   квадрат из двух границ, повёрнутый на 45°, — чтобы не заводить вторую
+   иконочную систему ради одной стрелки. */
+.chev {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  width: 16px; height: 16px; flex: 0 0 16px; position: relative;
+}
+.chev::after {
+  content: ""; position: absolute; left: 3px; top: 4px;
+  width: 7px; height: 7px;
+  border-top: 1.5px solid var(--muted); border-right: 1.5px solid var(--muted);
+  transform: rotate(45deg); transition: transform .15s;
+}
+.chev:hover::after { border-color: var(--rose-hi); }
+.chev.open::after { transform: rotate(135deg); top: 2px; }
+
+/* Страницы внутри раскрытого сайта: приглушены и с отступом, чтобы
+   вложенность читалась без линий и рамок. */
+.sub td { background: var(--panel2); font-size: 12px; }
+.sub td:first-child { padding-left: 40px; }

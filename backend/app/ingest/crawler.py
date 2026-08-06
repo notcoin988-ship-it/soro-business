@@ -104,6 +104,28 @@ TRACKING_PARAMS = (
     "phpsessid", "jsessionid", "sessionid",
 )
 TRACKING_PREFIXES = ("utm_",)
+
+# Пагинация списков. Битрикс нумерует каждый блок отдельно — PAGEN_1,
+# PAGEN_2, PAGEN_3, — и они комбинируются: `?PAGEN_1=2&PAGEN_3=4`. Боевой
+# обход eskhata.com дал 27 таких адресов, и canonical сайт по ним не
+# отдаёт, так что штатное схлопывание пагинации (см. блок canonical в
+# `crawl`) здесь не срабатывает.
+#
+# СЛЕДСТВИЕ, которое надо понимать: `_keep_param` работает внутри
+# `clean_url`, а он формирует и запрашиваемый адрес. Значит из любого
+# списка берётся только первая страница. Для базы знаний это то, что
+# нужно: вторая страница ленты новостей отвечает на те же вопросы, что и
+# первая, а место в лимите 150 страниц занимает.
+PAGINATION_PREFIXES = ("pagen_",)
+PAGINATION_PARAMS = ("page", "pagenum", "page_num")
+
+# Разделы, которые в базе знаний банка только шумят. На вопрос про вклад
+# бот не должен доставать новость трёхлетней давности или вакансию, а
+# именно это и происходит: из 146 страниц обхода eskhata.com 68 пришлось
+# на /events/ и 26 на /vacancies/.
+# Под другой банк меняется параметром `crawl(skip_paths=...)`.
+SKIP_PATH_PREFIXES = ("/events/", "/news/", "/vacancies/", "/press/")
+
 # Потолок на размер страницы: HTML сверх этого — не документ, а выгрузка
 MAX_BYTES = 5 * 1024 * 1024
 # расширения, которые точно не HTML; PDF среди них — см. решение 3
@@ -139,6 +161,7 @@ class CrawlStats:
     skipped_robots: int = 0     # запрещено robots.txt
     skipped_offdomain: int = 0  # ссылка/редирект на чужой домен
     skipped_asset: int = 0      # не-HTML (см. assets)
+    skipped_section: int = 0    # раздел из skip_paths: новости, вакансии
     skipped_depth: int = 0      # страниц, дальше которых не пошли по глубине
     skipped_dup: int = 0        # уже видели после нормализации
     skipped_dup_text: int = 0   # другой адрес, но текст слово в слово тот же
@@ -193,15 +216,19 @@ def clean_url(url: str) -> str:
 def _keep_param(piece: str) -> bool:
     """Оставить ли параметр запроса.
 
+    Выбрасываем трекинг, сессии и пагинацию (см. комментарии к спискам).
+
     Сравниваем ИМЯ параметра целиком, а не начало строки: проверка по
-    префиксу выбрасывала бы `_gap` заодно с `_ga`.
+    префиксу выбрасывала бы `_gap` заодно с `_ga`. Исключение — сами
+    префиксные списки, где начало имени и есть признак: `pagen_1`,
+    `pagen_2` и сколько бы Битрикс их ни завёл.
     """
     if not piece:
         return False
     name = piece.split("=", 1)[0].lower()
-    if name in TRACKING_PARAMS:
+    if name in TRACKING_PARAMS or name in PAGINATION_PARAMS:
         return False
-    return not name.startswith(TRACKING_PREFIXES)
+    return not name.startswith(TRACKING_PREFIXES + PAGINATION_PREFIXES)
 
 
 def normalize_url(url: str) -> str:
@@ -240,6 +267,19 @@ def same_domain(url: str, root: str) -> bool:
 def looks_like_asset(url: str) -> bool:
     path = urlsplit(url).path.lower()
     return path.endswith(ASSET_SUFFIXES)
+
+
+def is_skipped_path(url: str, prefixes: tuple[str, ...]) -> bool:
+    """Лежит ли адрес в разделе, который мы в базу знаний не берём.
+
+    Сравниваем начало пути, поэтому `/events/` отсекает и сам раздел, и
+    всё, что под ним. Слэш в конце префикса обязателен: без него
+    `/news` заодно убил бы `/newsletter`.
+    """
+    path = urlsplit(url).path.lower()
+    if not path.endswith("/"):
+        path += "/"
+    return path.startswith(prefixes)
 
 
 # ---------------------------------------------------------------------------
@@ -283,11 +323,16 @@ async def crawl(
     delay: float = DELAY_SEC,
     verify: bool = True,
     client: httpx.AsyncClient | None = None,
+    skip_paths: tuple[str, ...] = SKIP_PATH_PREFIXES,
 ) -> CrawlResult:
     """Обход в ширину от `start_url`. Возвращает страницы, лог и счётчики.
 
     `client` принимается снаружи, чтобы тесты подсовывали свой транспорт,
     а воркер переиспользовал один клиент на весь ingest.
+
+    `skip_paths` — разделы, которые не нужны в базе знаний. Пустой кортеж
+    отключает отсев: сайт другого банка может держать тарифы прямо в
+    /news/, и тогда список задаётся снаружи, а код не трогается.
     """
     result = CrawlResult()
     started = time.monotonic()
@@ -402,6 +447,14 @@ async def crawl(
             processed.add(final_key)
             seen.add(final_key)
 
+            # Раздел проверяем и здесь, не только в `_links`: редирект мог
+            # увести из продуктовой страницы в новости, и ссылку мы при
+            # постановке в очередь ещё не видели исключённой.
+            if depth > 0 and is_skipped_path(final_url, skip_paths):
+                result.stats.skipped_section += 1
+                result.log.append(f"[раздел исключён] {final_url}")
+                continue
+
             content_type = response.headers.get("content-type", "")
             if "html" not in content_type.lower():
                 _add_asset(result, final_url)
@@ -490,7 +543,7 @@ async def crawl(
             if nofollow:
                 result.log.append(f"[nofollow] ссылки с {final_url} не берём")
                 continue
-            for link in _links(html, final_url, root, result):
+            for link in _links(html, final_url, root, result, skip_paths):
                 key = normalize_url(link)
                 if key in seen:
                     result.stats.skipped_dup += 1
@@ -621,7 +674,13 @@ def page_directives(html: str, page_url: str) -> tuple[str | None, bool, bool]:
     return canonical, noindex, nofollow
 
 
-def _links(html: str, page_url: str, root: str, result: CrawlResult) -> list[str]:
+def _links(
+    html: str,
+    page_url: str,
+    root: str,
+    result: CrawlResult,
+    skip_paths: tuple[str, ...] = SKIP_PATH_PREFIXES,
+) -> list[str]:
     """Ссылки со страницы: свой домен, не ассеты, нормализованные.
 
     Принимаем уже декодированный html, а не Response: страницу и так
@@ -659,6 +718,11 @@ def _links(html: str, page_url: str, root: str, result: CrawlResult) -> list[str
             continue
         if looks_like_asset(absolute):
             _add_asset(result, absolute)
+            continue
+        # Отсекаем здесь, а не после скачивания: страница исключённого
+        # раздела не должна занимать ни запроса, ни места в лимите 150.
+        if is_skipped_path(absolute, skip_paths):
+            result.stats.skipped_section += 1
             continue
         out.append(absolute)
     return out
@@ -730,6 +794,7 @@ def format_report(result: CrawlResult) -> str:
             f"отсечено robots.txt:    {s.skipped_robots}",
             f"чужой домен:            {s.skipped_offdomain}",
             f"не-HTML (см. assets):   {s.skipped_asset}",
+            f"исключённые разделы:    {s.skipped_section}",
             f"дубли URL:              {s.skipped_dup}",
             f"копии по тексту:        {s.skipped_dup_text}",
             f"ошибок загрузки:        {s.errors}",
