@@ -8,6 +8,7 @@ import {
   listDocuments,
   uploadFile,
 } from "../lib/api";
+import Confirm, { ConfirmRequest } from "../components/Confirm";
 
 // Экран 02 — База знаний. Разметка и классы взяты из прототипа
 // (soro-business-console-2.html, секция kb): та же таблица, те же
@@ -218,6 +219,7 @@ export default function Knowledge() {
   const [busy, setBusy] = useState(false);
   // раскрытые сайты, по умолчанию все свёрнуты
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const { files, sites } = useMemo(() => split(docs), [docs]);
@@ -261,13 +263,28 @@ export default function Knowledge() {
   // 404, ошибка уходила необработанной в консоль, refresh не вызывался,
   // и строка оставалась на экране. Человек жал «удалить» ещё раз, и так
   // по кругу. Теперь ошибка видна, а список обновляется в любом случае.
+  // Подтверждение: удаление необратимо и уносит с собой все фрагменты,
+  // а промахнуться легко — список перерисовывается раз в 2 секунды, и
+  // строки под курсором успевают съехать.
+  function askDelete(doc: Doc) {
+    setConfirm({
+      title: "Удалить документ?",
+      text: `«${doc.title}» и все его фрагменты будут удалены безвозвратно. Бот перестанет отвечать по этому источнику.`,
+      onOk: () => void onDelete(doc),
+    });
+  }
+
+  function askDeleteSite(site: SiteGroup) {
+    const count = site.pages.length;
+    setConfirm({
+      title: `Удалить ${site.host}?`,
+      text: `${count} ${pageWord(count)} обхода и все их фрагменты будут удалены безвозвратно. Сайт можно будет обойти заново.`,
+      okLabel: "Удалить сайт",
+      onOk: () => void onDeleteSite(site),
+    });
+  }
+
   async function onDelete(doc: Doc) {
-    // Подтверждение: удаление необратимо и уносит с собой все фрагменты,
-    // а промахнуться легко — список перерисовывается раз в 2 секунды, и
-    // строки под курсором успевают съехать.
-    if (!window.confirm(`Удалить «${doc.title}»? Фрагменты уйдут безвозвратно.`)) {
-      return;
-    }
     setBusy(true);
     try {
       await deleteDocument(doc.id);
@@ -285,14 +302,6 @@ export default function Knowledge() {
   }
 
   async function onDeleteSite(site: SiteGroup) {
-    const count = site.pages.length;
-    if (
-      !window.confirm(
-        `Удалить ${site.host} целиком? Это ${count} ${pageWord(count)}.`,
-      )
-    ) {
-      return;
-    }
     setBusy(true);
     try {
       await deleteSite(site.host);
@@ -347,30 +356,25 @@ export default function Knowledge() {
           </p>
         </div>
         <div className="spacer" />
-        {/* Не <button> с programmatic click, а <label> к скрытому полю:
-            связь label→input открывает диалог силами самого браузера, без
-            JS. Программный `input.click()` в некоторых сборках Chrome и
-            под расширениями просто не срабатывает — диалог не появлялся
-            вовсе, а ошибки при этом никакой нет. */}
-        <label
-          className={`btn primary aslabel${busy ? " off" : ""}`}
-          htmlFor="kb-file"
-        >
-          Загрузить документы
-        </label>
+        {/* Прозрачное поле лежит ПОВЕРХ кнопки: клик попадает физически в
+            input, и диалог открывает сам браузер. Ни programmatic click,
+            ни <label for> не годятся — в Chrome они молча не срабатывают,
+            хотя в Edge открывают. Подробности в theme.css, .upload */}
+        <span className="upload">
+          <input
+            ref={fileInput}
+            className="file"
+            type="file"
+            accept=".pdf,.docx,.xlsx"
+            onChange={onFile}
+            disabled={busy}
+            aria-label="Загрузить документы"
+          />
+          <span className="btn primary" aria-hidden="true">
+            Загрузить документы
+          </span>
+        </span>
       </div>
-
-      {/* Поле скрыто визуально, но НЕ через display:none — элемент с
-          display:none часть браузеров считает неактивным и активацию по
-          label игнорирует. Прячем так, как принято для доступности. */}
-      <input
-        id="kb-file"
-        ref={fileInput}
-        className="file"
-        type="file"
-        accept=".pdf,.docx,.xlsx"
-        onChange={onFile}
-      />
 
       {/* Ошибка загрузки должна быть видна рядом с кнопкой, а не только
           в карточке ниже: иначе отказ выглядит как «ничего не произошло». */}
@@ -444,7 +448,7 @@ export default function Knowledge() {
                 </td>
                 <td>
                   <DeleteButton
-                    onClick={() => onDelete(doc)}
+                    onClick={() => askDelete(doc)}
                     disabled={busy}
                     what={`«${doc.title}»`}
                   />
@@ -507,7 +511,7 @@ export default function Knowledge() {
                     </td>
                     <td>
                       <DeleteButton
-                        onClick={() => onDeleteSite(site)}
+                        onClick={() => askDeleteSite(site)}
                         disabled={busy}
                         what={`сайт ${site.host} целиком`}
                       />
@@ -538,7 +542,7 @@ export default function Knowledge() {
                         </td>
                         <td>
                           <DeleteButton
-                            onClick={() => onDelete(doc)}
+                            onClick={() => askDelete(doc)}
                             disabled={busy}
                             what={`страницу ${pathOf(doc)}`}
                           />
@@ -576,6 +580,8 @@ export default function Knowledge() {
           </p>
         </div>
       </div>
+
+      <Confirm request={confirm} onClose={() => setConfirm(null)} />
     </>
   );
 }
