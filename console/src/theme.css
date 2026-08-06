@@ -25,13 +25,12 @@
 .text:focus { outline: none; border-color: var(--rose-dim); }
 .text::placeholder { color: var(--muted2); }
 
-.file { color: var(--muted); font-size: 12.5px; }
-.file::file-selector-button {
-  background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
-  color: var(--paper); font: inherit; font-size: 12px; padding: 6px 10px;
-  margin-right: 10px; cursor: pointer;
-}
-.file::file-selector-button:hover { border-color: var(--rose-dim); }
+/* Файловое поле скрыто намеренно. Нативный input[type=file] рисует свою
+   надпись средствами браузера, и она берётся из локали системы: на
+   китайской сборке Windows это «选择文件». Ни перевести, ни заменить её
+   из CSS нельзя — только спрятать поле и открывать диалог по кнопке
+   «Загрузить документы», как и нарисовано в эталоне. */
+.file { display: none; }
 
 .fail { color: var(--rose-hi); font-size: 12px; }
 .linkbtn {

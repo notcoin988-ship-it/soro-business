@@ -113,6 +113,28 @@ export default function Knowledge() {
     }
   }
 
+  // Удаление шло без try/catch: если документ уже удалён (или строка
+  // устарела — список перерисовывается раз в 2 секунды), запрос падал
+  // 404, ошибка уходила необработанной в консоль, refresh не вызывался,
+  // и строка оставалась на экране. Человек жал «удалить» ещё раз, и так
+  // по кругу. Теперь ошибка видна, а список обновляется в любом случае.
+  async function onDelete(doc: Doc) {
+    setBusy(true);
+    try {
+      await deleteDocument(doc.id);
+      setError("");
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? `Не удалось удалить «${doc.title}»: ${err.message}`
+          : "Не удалось удалить документ",
+      );
+    } finally {
+      setBusy(false);
+      await refresh();
+    }
+  }
+
   async function onSite(event: React.FormEvent) {
     event.preventDefault();
     if (!url.trim()) return;
@@ -151,19 +173,22 @@ export default function Knowledge() {
         </button>
       </div>
 
+      {/* Поле файла скрыто (см. .file в theme.css): диалог открывает кнопка
+          «Загрузить документы» в шапке — так нарисовано в эталоне, и так
+          не видно нативной надписи браузера на языке системы. */}
+      <input
+        ref={fileInput}
+        className="file"
+        type="file"
+        accept=".pdf,.docx,.xlsx"
+        onChange={onFile}
+      />
+
       <div className="card" style={{ marginBottom: 14 }}>
         <div className="eyebrow">Добавить источник</div>
         <div
           style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}
         >
-          <input
-            ref={fileInput}
-            className="file"
-            type="file"
-            accept=".pdf,.docx,.xlsx"
-            onChange={onFile}
-            disabled={busy}
-          />
           <form onSubmit={onSite} style={{ display: "flex", gap: 8, flex: 1 }}>
             <input
               className="text"
@@ -229,10 +254,8 @@ export default function Knowledge() {
                 <td>
                   <button
                     className="linkbtn"
-                    onClick={async () => {
-                      await deleteDocument(doc.id);
-                      await refresh();
-                    }}
+                    disabled={busy}
+                    onClick={() => onDelete(doc)}
                   >
                     удалить
                   </button>
