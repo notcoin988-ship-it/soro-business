@@ -5,11 +5,6 @@
 входа и выхода, а что ответить — решается здесь. Иначе логика расползётся
 по трём файлам, и в WhatsApp бот начнёт вести себя не так, как в Telegram.
 
-СОСТОЯНИЕ: неделя 1 — каркас без RAG. Бот отвечает эхом, но весь путь
-сообщения уже настоящий: контакт, идентичность, диалог, маскирование ПДн,
-запись в `messages`. Когда появятся `core.rag` и `core.llm`, меняется
-только шаг 6, всё остальное уже работает и покрыто тестами.
-
 ПОРЯДОК ШАГОВ ОБЯЗАТЕЛЕН:
 
  1. контакт и идентичность по каналу (`channel` + `external_id`);
@@ -17,8 +12,8 @@
  3. маскирование ПДн: в `text` оригинал, в `text_masked` маска;
  4. диалог у оператора — бот молчит, сообщение просто ложится в инбокс;
  5. просьба про оператора → эскалация;
- 6. ответ (пока эхо, дальше RAG + модель);
- 7. запись ответа с телеметрией.
+ 6. ответ: поиск по базе знаний, затем модель (см. `_answer`);
+ 7. запись ответа с телеметрией и `chunks_used`.
 
 Шаг 3 стоит третьим не случайно: всё, что ниже, работает уже с
 `text_masked`, и оригинал в модель не попадает никогда.
@@ -26,25 +21,43 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core import llm, rag
 from app.core.pii import mask
 from app.models import ChannelIdentity, Contact, Conversation, Message, Workspace
+
+log = logging.getLogger(__name__)
 
 # Триггер «позовите человека» из раздела 8.1: оператор, одам, человек,
 # мутахассис. Компилируется один раз — проверяется на каждом сообщении.
 OPERATOR_RE = re.compile(settings.OPERATOR_REQUEST_RE, re.I)
 
-# Пока нет модели, бот отвечает эхом. Формулировка временная и намеренно
-# заметная: если она доживёт до демо, это будет видно сразу.
-ECHO_TEMPLATE = "Шумо навиштед: «{text}». Ҷустуҷӯ ҳанӯз пайваст нашудааст."
 OPERATOR_REPLY = "Ҳозир мутахассисро пайваст мекунам."
+
+# Ответа в базе знаний нет — говорим об этом сами, не тратя вызов модели.
+# Двуязычно, потому что язык вопроса здесь ещё не определён: определять его
+# для одной фразы — лишний код, а на демо клиент пишет и так и так.
+NO_ANSWER_REPLY = (
+    "Ин маълумот дар ҳуҷҷатҳои бонк нест — ҳозир мутахассисро пайваст мекунам.\n"
+    "Этой информации нет в документах банка — соединяю со специалистом."
+)
+
+# Модель недоступна. Отдельная формулировка от NO_ANSWER_REPLY: там ответа
+# нет в документах, здесь мы просто не смогли спросить, и оператору важно
+# видеть разницу в причине эскалации.
+LLM_DOWN_REPLY = (
+    "Ҳозир ҷавоб дода наметавонам, мутахассисро пайваст мекунам.\n"
+    "Сейчас не могу ответить, соединяю со специалистом."
+)
 
 
 @dataclass
@@ -56,6 +69,12 @@ class Reply:
     message_id: int
     latency_ms: int
     escalated: bool = False
+    # причина эскалации для инбокса: 'no_answer' | 'pii_topic' |
+    # 'user_request' | 'llm_unavailable'
+    reason: str | None = None
+    # фрагменты в порядке ссылок [1], [2] — из них канал строит бейджи в
+    # консоли и футер «Манбаъ: …» в Telegram (раздел 6.6)
+    chunks_used: list[int] = field(default_factory=list)
 
 
 async def get_workspace(session: AsyncSession, slug: str | None = None) -> Workspace:
@@ -225,24 +244,70 @@ async def handle_incoming(
             escalated=True,
         )
 
-    # Здесь будут RAG и модель. Пока эхо — но по тому же маршруту:
-    # наружу уходит text_masked, а не оригинал.
-    answer = ECHO_TEMPLATE.format(text=incoming.text_masked)
-    latency_ms = int((time.monotonic() - started) * 1000)
+    # RAG и модель. В поиск и в модель уходит text_masked, а не оригинал:
+    # так номер карты клиента не попадёт ни в промпт, ни в логи провайдера.
+    answer_text, chunks_used, escalate, reason = await _answer(
+        session, workspace, incoming.text_masked
+    )
+    if escalate:
+        conversation.status = "operator"
 
+    latency_ms = int((time.monotonic() - started) * 1000)
     outgoing = await save_message(
         session,
         conversation=conversation,
         channel=channel,
         role="assistant",
-        text=answer,
+        text=answer_text,
         latency_ms=latency_ms,
+        chunks_used=chunks_used,
     )
     await session.commit()
 
     return Reply(
-        text=answer,
+        text=answer_text,
         conversation_id=conversation.id,
         message_id=outgoing.id,
         latency_ms=latency_ms,
+        escalated=escalate,
+        reason=reason,
+        chunks_used=chunks_used,
     )
+
+
+async def _answer(
+    session: AsyncSession, workspace: Workspace, question: str
+) -> tuple[str, list[int], bool, str | None]:
+    """Поиск → модель → текст. Возвращает (текст, chunks_used, эскалация, причина).
+
+    Два фильтра подряд, и оба нужны:
+
+    1. порог поиска (раздел 6.4) — если лучший фрагмент ниже
+       `RAG_MIN_SCORE`, модель не зовём вовсе. Это экономит секунды на
+       вопросах вроде «какой у меня баланс», где отвечать всё равно нечем;
+    2. сама модель — правило 1 промпта велит ей поставить `[ESCALATE]`,
+       если во фрагментах ответа нет. Порог грубый и пропускает похожие,
+       но не подходящие фрагменты; модель видит текст и решает точнее.
+
+    Прогон golden set показал, почему одного порога мало: при 0,65 нет ни
+    одного выдуманного ответа, но 16 вопросов из 40 уходят оператору,
+    хотя ответ на них есть и найден. Второй фильтр позволит когда-нибудь
+    опустить порог, не начав выдумывать.
+    """
+    found = await rag.search(session, question, workspace.id)
+
+    if not found.has_answer:
+        return NO_ANSWER_REPLY, [], True, llm.REASON_NO_ANSWER
+
+    try:
+        result = await llm.answer(
+            question, found.hits, bank_name=workspace.name
+        )
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
+        # Модель недоступна — это не повод показать клиенту трейс. Уводим
+        # к оператору и оставляем след в логе: на демо это первое, что
+        # придётся проверять.
+        log.warning("модель недоступна (%s): %s", type(exc).__name__, exc)
+        return LLM_DOWN_REPLY, [], True, "llm_unavailable"
+
+    return result.text, result.chunks_used, result.escalate, result.reason

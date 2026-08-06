@@ -1,11 +1,13 @@
 """Тесты пути одного сообщения (раздел 4 ТЗ).
 
-Ответ пока эхо, но маршрут настоящий, и проверяется именно он: как
-заводятся контакт и идентичность, почему диалог один на все каналы, что
-попадает в `text`, а что в `text_masked`, и когда бот обязан замолчать.
+Проверяется маршрут, а не ответ: как заводятся контакт и идентичность,
+почему диалог один на все каналы, что попадает в `text`, а что в
+`text_masked`, и когда бот обязан замолчать.
 
-Когда на шестом шаге появятся RAG и модель, эти тесты не должны
-измениться — если изменятся, значит сломали маршрут, а не ответ.
+База знаний у тестового воркспейса пустая, поэтому поиск честно не
+находит ответа и бот уводит клиента к оператору. Это и нужно: маршрут
+проверяется без зависимости от содержимого базы и от модели. Сам ответ
+модели — в `test_llm.py`, связка поиска с моделью — в `test_dialog_rag.py`.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import func, select
 
-from app.core.dialog import ECHO_TEMPLATE, handle_incoming, wants_operator
+from app.core.dialog import NO_ANSWER_REPLY, handle_incoming, wants_operator
 from app.models import ChannelIdentity, Contact, Conversation, Message
 
 WS = "test-ws"
@@ -89,12 +91,17 @@ async def test_different_channels_are_different_contacts_until_linked(
 
 
 async def test_one_conversation_per_contact(session, workspace):
-    first = await send(session, "Салом!")
-    second = await send(session, "Боз як савол")
+    """Второе сообщение продолжает тот же диалог, а не заводит новый.
 
-    assert first.conversation_id == second.conversation_id
-    conversations = await count(session, Conversation, workspace)
-    assert conversations == 1
+    Проверяем по базе, а не по ответам: на пустой базе знаний первый же
+    вопрос уходит оператору, и на второй бот молчит (возвращает None) —
+    это правильное поведение, диалогом уже занимается человек.
+    """
+    await send(session, "Салом!")
+    await send(session, "Боз як савол")
+
+    assert await count(session, Conversation, workspace) == 1
+    assert await count(session, Contact, workspace) == 1
 
 
 async def test_messages_are_stored_both_sides(session, workspace):
@@ -132,19 +139,23 @@ async def test_original_in_text_mask_in_text_masked(session, workspace):
 
 
 async def test_bot_answer_never_contains_raw_pii(session, workspace):
-    """Эхо строится из `text_masked`, а не из оригинала.
-
-    Это репетиция того, что будет с моделью: наружу уходит только маска.
-    """
+    """Наружу номер карты не уходит ни при каком ответе."""
     reply = await send(session, f"Корти ман {CARD}")
 
     assert CARD not in reply.text
-    assert "[CARD]" in reply.text
 
 
-async def test_echo_uses_masked_text(session, workspace):
-    reply = await send(session, "Салом")
-    assert reply.text == ECHO_TEMPLATE.format(text="Салом")
+async def test_empty_knowledge_base_escalates(session, workspace):
+    """База знаний пуста — отвечать нечем, и бот честно зовёт оператора.
+
+    Ровно этого требует раздел 3.2: лучше лишняя эскалация, чем выдумка.
+    """
+    reply = await send(session, "Фоизи амонат чанд аст?")
+
+    assert reply.text == NO_ANSWER_REPLY
+    assert reply.escalated
+    assert reply.reason == "no_answer"
+    assert reply.chunks_used == []
 
 
 # ---------------------------------------------------------------------------
