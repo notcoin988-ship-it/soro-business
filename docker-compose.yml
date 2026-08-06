@@ -32,9 +32,14 @@ services:
     ports: [ "8000:8000" ]
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     # ОТКЛОНЕНИЕ ОТ ТЗ (неделя 2): ./scripts смонтирован в контейнер, иначе
-    # scripts/bench_index.py и будущий scripts/eval_rag.py (неделя 3) негде
-    # запускать — все зависимости стоят только внутри образа.
-    volumes: [ "./backend:/code", "./scripts:/code/scripts", "uploads:/data/uploads" ]
+    # scripts/bench_index.py и scripts/eval_rag.py негде запускать — все
+    # зависимости стоят только внутри образа. По той же причине смонтирован
+    # ./tests: eval_rag.py читает golden.yaml, а он лежит в корне проекта.
+    volumes:
+      - "./backend:/code"
+      - "./scripts:/code/scripts"
+      - "./tests:/code/tests"
+      - "uploads:/data/uploads"
 
   worker:
     build: ./backend
