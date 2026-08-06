@@ -145,6 +145,16 @@ def build_routes() -> dict[str, Route]:
                 "<a href='/empty'>Пустая</a>"
                 "<a href='/kursy'>Курсы</a>"
                 "<a href='/gone'>Битая</a>"
+                # раздел новостей и его пагинация: в базу знаний не идут
+                "<a href='/events/'>Новости</a>"
+                "<a href='/events/?PAGEN_1=2'>Новости, страница 2</a>"
+                "<a href='/events/pro-vklad/'>Новость про вклад</a>"
+                "<a href='/vacancies/'>Вакансии</a>"
+                # пагинация вне исключённого раздела: сама страница нужна,
+                # а её вторая страница — нет
+                "<a href='/kursy?PAGEN_1=3'>Курсы, страница 3</a>"
+                # значимый параметр обязан выжить
+                "<a href='/about?lang=tj'>Дар бораи мо тоҷикӣ</a>"
                 "<a href='https://example.org/x'>Другой сайт</a>"
                 "<a href='mailto:info@bank.tj'>Почта</a>"
                 "<a href='#top'>Наверх</a>",
@@ -184,4 +194,19 @@ def build_routes() -> dict[str, Route]:
         ),
         # сервер не сказал кодировку — она только в <meta>
         "/kursy": Route(body=WIN1251_PAGE, content_type="text/html"),
+        # Раздел новостей: в базе знаний банка он только шумит. Ни одна из
+        # трёх страниц ниже не должна быть даже запрошена.
+        "/events/": Route(
+            body=html(
+                "<h1>Хабарҳо</h1><p>Лента новостей банка.</p>"
+                "<a href='/events/pro-vklad/'>Новость про вклад</a>",
+                title="События",
+            )
+        ),
+        "/events/pro-vklad/": Route(
+            body=html("<p>Банк запустил новый вклад.</p>", title="События")
+        ),
+        "/vacancies/": Route(
+            body=html("<p>Приходи работать к нам в команду.</p>", title="Вакансии")
+        ),
     }

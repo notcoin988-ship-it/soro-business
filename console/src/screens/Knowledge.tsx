@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Doc,
   DocStatus,
   addSite,
   deleteDocument,
+  deleteSite,
   listDocuments,
   uploadFile,
 } from "../lib/api";
@@ -48,6 +49,144 @@ function volume(doc: Doc): string {
   return doc.kind === "xlsx" ? `${doc.pages} лист` : `${doc.pages} стр.`;
 }
 
+// «1 страница / 2 страницы / 5 страниц» — иначе в подтверждении удаления
+// выходит «Это 146 страница».
+function pageWord(n: number): string {
+  const tail = n % 100;
+  if (tail >= 11 && tail <= 14) return "страниц";
+  switch (n % 10) {
+    case 1:
+      return "страница";
+    case 2:
+    case 3:
+    case 4:
+      return "страницы";
+    default:
+      return "страниц";
+  }
+}
+
+// Корзина. В эталоне иконок-контуров нет вовсе (там только залитые
+// прямоугольники логотипа и полилинии графиков), поэтому рисуем свою:
+// stroke="currentColor" — цвет наследуется от кнопки и сам меняется на
+// наведении, отдельного правила для svg не нужно.
+function TrashIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M6 6l1 14h10l1-14" />
+      <path d="M10 11v5M14 11v5" />
+    </svg>
+  );
+}
+
+function DeleteButton({
+  onClick,
+  disabled,
+  what,
+}: {
+  onClick: () => void;
+  disabled: boolean;
+  what: string;
+}) {
+  // aria-label обязателен: текста в кнопке больше нет, и без него
+  // скринридер прочитает пустую кнопку
+  return (
+    <button
+      className="iconbtn"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={`Удалить ${what}`}
+      title={`Удалить ${what}`}
+    >
+      <TrashIcon />
+    </button>
+  );
+}
+
+// --- группировка страниц обхода -------------------------------------------
+// Обход заводит по строке `documents` на каждую страницу сайта — у Эсхаты
+// их полторы сотни, и таблица превращалась в простыню. Эталон рисует сайт
+// ОДНОЙ строкой («eskhata.tj · 96 страниц»), к ней добавлен только
+// раскрывающий шеврон. Группируем на фронте: связи между страницами в базе
+// нет, но хост есть в source_url, и этого достаточно.
+
+interface SiteGroup {
+  host: string;
+  pages: Doc[];
+  chunks: number;
+  status: DocStatus;
+  chunksDone: number;
+  chunksTotal: number;
+}
+
+// Внутри раскрытого сайта хост у всех строк один и тот же — показываем
+// путь, иначе полтораста строк начинаются одинаково и читать их нельзя.
+function pathOf(doc: Doc): string {
+  if (!doc.source_url) return "—";
+  try {
+    const { pathname, search } = new URL(doc.source_url);
+    return pathname + search;
+  } catch {
+    return doc.source_url;
+  }
+}
+
+function hostOf(doc: Doc): string | null {
+  if (doc.kind !== "web" || !doc.source_url) return null;
+  try {
+    return new URL(doc.source_url).host;
+  } catch {
+    return null;
+  }
+}
+
+function groupStatus(pages: Doc[]): DocStatus {
+  // сводный статус: пока хоть одна страница в работе — сайт «индексируется»,
+  // упавшие важнее готовых, иначе ошибка потеряется внутри свёрнутой группы
+  if (pages.some((p) => IN_PROGRESS.includes(p.status))) return "indexing";
+  if (pages.some((p) => p.status === "failed")) return "failed";
+  return "ready";
+}
+
+function split(docs: Doc[]): { files: Doc[]; sites: SiteGroup[] } {
+  const files: Doc[] = [];
+  const byHost = new Map<string, Doc[]>();
+
+  for (const doc of docs) {
+    const host = hostOf(doc);
+    if (host === null) {
+      files.push(doc);
+      continue;
+    }
+    const bucket = byHost.get(host);
+    if (bucket) bucket.push(doc);
+    else byHost.set(host, [doc]);
+  }
+
+  const sites = [...byHost.entries()].map(([host, pages]) => ({
+    host,
+    pages,
+    chunks: pages.reduce((sum, p) => sum + p.chunks, 0),
+    status: groupStatus(pages),
+    chunksDone: pages.reduce((sum, p) => sum + p.chunks_done, 0),
+    chunksTotal: pages.reduce((sum, p) => sum + p.chunks_total, 0),
+  }));
+
+  return { files, sites };
+}
+
 function Status({ doc }: { doc: Doc }) {
   const percent =
     doc.chunks_total > 0 ? Math.round((doc.chunks_done / doc.chunks_total) * 100) : 0;
@@ -77,7 +216,11 @@ export default function Knowledge() {
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // раскрытые сайты, по умолчанию все свёрнуты
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const fileInput = useRef<HTMLInputElement>(null);
+
+  const { files, sites } = useMemo(() => split(docs), [docs]);
 
   const refresh = useCallback(async () => {
     try {
@@ -119,6 +262,12 @@ export default function Knowledge() {
   // и строка оставалась на экране. Человек жал «удалить» ещё раз, и так
   // по кругу. Теперь ошибка видна, а список обновляется в любом случае.
   async function onDelete(doc: Doc) {
+    // Подтверждение: удаление необратимо и уносит с собой все фрагменты,
+    // а промахнуться легко — список перерисовывается раз в 2 секунды, и
+    // строки под курсором успевают съехать.
+    if (!window.confirm(`Удалить «${doc.title}»? Фрагменты уйдут безвозвратно.`)) {
+      return;
+    }
     setBusy(true);
     try {
       await deleteDocument(doc.id);
@@ -133,6 +282,40 @@ export default function Knowledge() {
       setBusy(false);
       await refresh();
     }
+  }
+
+  async function onDeleteSite(site: SiteGroup) {
+    const count = site.pages.length;
+    if (
+      !window.confirm(
+        `Удалить ${site.host} целиком? Это ${count} ${pageWord(count)}.`,
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await deleteSite(site.host);
+      setError("");
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? `Не удалось удалить ${site.host}: ${err.message}`
+          : "Не удалось удалить сайт",
+      );
+    } finally {
+      setBusy(false);
+      await refresh();
+    }
+  }
+
+  function toggle(host: string) {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(host)) next.delete(host);
+      else next.add(host);
+      return next;
+    });
   }
 
   async function onSite(event: React.FormEvent) {
@@ -164,25 +347,38 @@ export default function Knowledge() {
           </p>
         </div>
         <div className="spacer" />
-        <button
-          className="btn primary"
-          disabled={busy}
-          onClick={() => fileInput.current?.click()}
+        {/* Не <button> с programmatic click, а <label> к скрытому полю:
+            связь label→input открывает диалог силами самого браузера, без
+            JS. Программный `input.click()` в некоторых сборках Chrome и
+            под расширениями просто не срабатывает — диалог не появлялся
+            вовсе, а ошибки при этом никакой нет. */}
+        <label
+          className={`btn primary aslabel${busy ? " off" : ""}`}
+          htmlFor="kb-file"
         >
           Загрузить документы
-        </button>
+        </label>
       </div>
 
-      {/* Поле файла скрыто (см. .file в theme.css): диалог открывает кнопка
-          «Загрузить документы» в шапке — так нарисовано в эталоне, и так
-          не видно нативной надписи браузера на языке системы. */}
+      {/* Поле скрыто визуально, но НЕ через display:none — элемент с
+          display:none часть браузеров считает неактивным и активацию по
+          label игнорирует. Прячем так, как принято для доступности. */}
       <input
+        id="kb-file"
         ref={fileInput}
         className="file"
         type="file"
         accept=".pdf,.docx,.xlsx"
         onChange={onFile}
       />
+
+      {/* Ошибка загрузки должна быть видна рядом с кнопкой, а не только
+          в карточке ниже: иначе отказ выглядит как «ничего не произошло». */}
+      {error && (
+        <div className="fail" style={{ marginBottom: 12 }}>
+          {error}
+        </div>
+      )}
 
       <div className="card" style={{ marginBottom: 14 }}>
         <div className="eyebrow">Добавить источник</div>
@@ -203,11 +399,6 @@ export default function Knowledge() {
             </button>
           </form>
         </div>
-        {error && (
-          <div className="fail" style={{ marginTop: 8 }}>
-            {error}
-          </div>
-        )}
       </div>
 
       <div className="card" style={{ padding: "6px 4px" }}>
@@ -229,7 +420,7 @@ export default function Knowledge() {
                 </td>
               </tr>
             )}
-            {docs.map((doc) => (
+            {files.map((doc) => (
               <tr key={doc.id}>
                 <td>
                   <div className="fname">
@@ -252,16 +443,111 @@ export default function Knowledge() {
                   <Status doc={doc} />
                 </td>
                 <td>
-                  <button
-                    className="linkbtn"
-                    disabled={busy}
+                  <DeleteButton
                     onClick={() => onDelete(doc)}
-                  >
-                    удалить
-                  </button>
+                    disabled={busy}
+                    what={`«${doc.title}»`}
+                  />
                 </td>
               </tr>
             ))}
+
+            {/* Сайт — одной строкой, как в эталоне. Шеврон разворачивает
+                список его страниц отдельными строками ниже. */}
+            {sites.map((site) => {
+              const open = expanded.has(site.host);
+              const percent =
+                site.chunksTotal > 0
+                  ? Math.round((site.chunksDone / site.chunksTotal) * 100)
+                  : 0;
+              return (
+                <Fragment key={site.host}>
+                  <tr>
+                    <td>
+                      <div className="fname">
+                        <button
+                          className={`chev${open ? " open" : ""}`}
+                          onClick={() => toggle(site.host)}
+                          aria-expanded={open}
+                          aria-label={
+                            open
+                              ? `Свернуть страницы ${site.host}`
+                              : `Показать страницы ${site.host}`
+                          }
+                          title={open ? "Свернуть" : "Показать страницы"}
+                        />
+                        <div className="ficon">WEB</div>
+                        <div>
+                          {site.host}
+                          <br />
+                          <span
+                            className="mono"
+                            style={{ fontSize: "10.5px", color: "var(--muted2)" }}
+                          >
+                            {site.pages.length} {pageWord(site.pages.length)} ·{" "}
+                            {site.chunks} фрагментов
+                          </span>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="mono">
+                      {site.pages.length} {pageWord(site.pages.length)}
+                    </td>
+                    <td className="mono">{site.chunks || "—"}</td>
+                    <td>
+                      <span className={`pill ${STATUS_PILL[site.status]}`}>
+                        <span className="dot" />
+                        {STATUS_LABEL[site.status]}
+                      </span>
+                      {IN_PROGRESS.includes(site.status) && (
+                        <div className="bar" style={{ marginTop: 6 }}>
+                          <i style={{ width: `${percent}%` }} />
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      <DeleteButton
+                        onClick={() => onDeleteSite(site)}
+                        disabled={busy}
+                        what={`сайт ${site.host} целиком`}
+                      />
+                    </td>
+                  </tr>
+
+                  {open &&
+                    site.pages.map((doc) => (
+                      <tr key={doc.id} className="sub">
+                        <td>
+                          <span
+                            className="mono"
+                            style={{ fontSize: "11px", color: "var(--muted)" }}
+                          >
+                            {pathOf(doc)}
+                          </span>
+                          <br />
+                          <span
+                            style={{ fontSize: "11px", color: "var(--muted2)" }}
+                          >
+                            {doc.title}
+                          </span>
+                        </td>
+                        <td className="mono">{volume(doc)}</td>
+                        <td className="mono">{doc.chunks || "—"}</td>
+                        <td>
+                          <Status doc={doc} />
+                        </td>
+                        <td>
+                          <DeleteButton
+                            onClick={() => onDelete(doc)}
+                            disabled={busy}
+                            what={`страницу ${pathOf(doc)}`}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>

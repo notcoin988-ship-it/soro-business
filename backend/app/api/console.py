@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import (
     APIRouter,
@@ -164,6 +165,49 @@ async def list_documents(
         )
     ).all()
     return [await _to_out(session, d) for d in documents]
+
+
+@router.delete("/documents")
+async def delete_site(
+    host: str, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """Удалить все страницы одного сайта разом.
+
+    Обход даёт по строке `documents` на страницу — у Эсхаты их полторы
+    сотни. Удалять их по одной из браузера значит полторы сотни запросов
+    и полминуты ожидания, поэтому у консоли есть этот эндпоинт: на экране
+    02 страницы сайта свёрнуты в одну строку, и корзина на ней сносит
+    сайт целиком.
+
+    Хост сравниваем разобранным, а не по `LIKE '%eskhata.com%'`: подстрока
+    зацепила бы и `not-eskhata.com.evil.tj`.
+    """
+    workspace = await get_workspace(session)
+    wanted = urlsplit(host if "//" in host else f"//{host}").netloc.lower()
+    if not wanted:
+        raise HTTPException(status_code=422, detail="нужен хост, например eskhata.com")
+
+    documents = (
+        await session.scalars(
+            select(Document)
+            .where(Document.workspace_id == workspace.id)
+            .where(Document.kind == "web")
+            .where(Document.source_url.is_not(None))
+        )
+    ).all()
+
+    deleted = 0
+    for document in documents:
+        if urlsplit(document.source_url).netloc.lower() != wanted:
+            continue
+        await session.delete(document)
+        deleted += 1
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"страниц сайта {wanted} нет")
+
+    await session.commit()
+    return {"deleted": deleted}
 
 
 # response_model=None нужен явно: из аннотации `-> None` FastAPI выводит

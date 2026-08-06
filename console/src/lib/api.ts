@@ -83,3 +83,15 @@ export async function deleteDocument(id: number): Promise<void> {
   });
   if (!response.ok) throw new ApiError(response.status, await response.text());
 }
+
+// Все страницы одного сайта разом. Обход даёт по строке documents на
+// страницу, у Эсхаты их полторы сотни — по одной удалять их из браузера
+// значит полторы сотни запросов.
+export async function deleteSite(host: string): Promise<{ deleted: number }> {
+  const response = await fetch(
+    `${API_BASE}/documents?host=${encodeURIComponent(host)}`,
+    { method: "DELETE", credentials: "include" },
+  );
+  if (!response.ok) throw new ApiError(response.status, await response.text());
+  return (await response.json()) as { deleted: number };
+}

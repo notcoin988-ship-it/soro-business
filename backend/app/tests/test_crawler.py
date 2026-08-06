@@ -21,6 +21,7 @@ from app.ingest.crawler import (
     clean_url,
     crawl,
     format_report,
+    is_skipped_path,
     looks_like_asset,
     normalize_url,
     same_domain,
@@ -65,9 +66,17 @@ def paths(result) -> set[str]:
         ("http://bank.tj:80/tarify", "http://bank.tj/tarify"),
         ("https://bank.tj", "https://bank.tj/"),
         ("https://bank.tj/", "https://bank.tj/"),
-        # значимые параметры остаются, но порядок канонизируется
-        ("https://bank.tj/news?page=2&lang=tj", "https://bank.tj/news?lang=tj&page=2"),
-        ("https://bank.tj/news?lang=tj&page=2", "https://bank.tj/news?lang=tj&page=2"),
+        # значимые параметры остаются, но порядок канонизируется.
+        # Именно значимые: `page` отсюда убран намеренно — это пагинация,
+        # см. test_pagination_param_is_dropped
+        (
+            "https://bank.tj/news?city=khujand&lang=tj",
+            "https://bank.tj/news?city=khujand&lang=tj",
+        ),
+        (
+            "https://bank.tj/news?lang=tj&city=khujand",
+            "https://bank.tj/news?city=khujand&lang=tj",
+        ),
         # трекинг вычищается, полезное остаётся
         (
             "https://bank.tj/news?utm_medium=cpc&lang=tj",
@@ -481,22 +490,22 @@ async def test_site_requiring_trailing_slash():
     # 404 и смазали проверку
     start = (
         "<html><head><title>Асосӣ</title></head><body><main>"
-        "<a href='/news/'>Хабарҳо</a></main></body></html>"
+        "<a href='/tarify/'>Тарифҳо</a></main></body></html>"
     ).encode("utf-8")
-    news = (
-        "<html><head><title>Хабарҳо</title></head><body><main>"
-        "<p>Хабари нав.</p></main></body></html>"
+    page = (
+        "<html><head><title>Тарифҳо</title></head><body><main>"
+        "<p>Фоизи солона — 14,5%.</p></main></body></html>"
     ).encode("utf-8")
     routes = {
         "/": Route(body=start),
-        "/news/": Route(body=news),
+        "/tarify/": Route(body=page),
         # без слэша сайт отвечает 404 — как настоящий Битрикс
-        "/news": Route(status=404, body=b"not found", content_type="text/plain"),
+        "/tarify": Route(status=404, body=b"not found", content_type="text/plain"),
     }
     server = FixtureSite(routes).start()
     try:
         result = await crawl(server.base_url, delay=0)
-        assert any(p.url.endswith("/news/") for p in result.pages)
+        assert any(p.url.endswith("/tarify/") for p in result.pages)
         assert result.stats.errors == 0
     finally:
         server.stop()
@@ -518,12 +527,95 @@ async def test_start_url_without_slash_is_retried_with_slash():
         server.stop()
 
 
+# ---------------------------------------------------------------------------
+# пагинация и исключённые разделы
+# ---------------------------------------------------------------------------
+
+
+async def test_pagination_param_is_dropped():
+    """`?PAGEN_1=3` схлопывается в сам адрес — второго запроса нет.
+
+    Битрикс нумерует каждый блок списка своим параметром, и они
+    комбинируются: боевой обход eskhata.com дал 27 адресов вида
+    `?PAGEN_1=2&PAGEN_3=4`. Canonical сайт по ним не отдаёт (проверено
+    запросом), поэтому единственная защита — выбросить сам параметр.
+    """
+    assert normalize_url("https://b.tj/kursy?PAGEN_1=3") == "https://b.tj/kursy"
+    assert (
+        normalize_url("https://b.tj/events/?PAGEN_1=2&PAGEN_3=4")
+        == "https://b.tj/events"
+    )
+    # общие имена тоже: page=2 это та же листалка
+    assert normalize_url("https://b.tj/list?page=2") == "https://b.tj/list"
+
+
+async def test_meaningful_param_survives_pagination_filter():
+    """Сторож от жадности: `lang` — не пагинация и обязан остаться.
+
+    Без этого теста легко «почистить» заодно язык страницы, и таджикская
+    версия сайта в базу знаний не попадёт.
+    """
+    assert normalize_url("https://b.tj/about?lang=tj") == "https://b.tj/about?lang=tj"
+    # и параметр, лишь похожий на пагинацию началом имени
+    assert (
+        normalize_url("https://b.tj/x?pagenumber_hint=1")
+        == "https://b.tj/x?pagenumber_hint=1"
+    )
+
+
+async def test_paginated_url_is_not_requested_twice(site, result):
+    """Страница списка скачивается один раз, а не по разу на страницу.
+
+    На полигоне со стартовой ведут `/kursy` и `/kursy?PAGEN_1=3` — сервер
+    отвечает по пути и на то, и на другое, так что без фильтра было бы
+    два обращения.
+    """
+    assert site.hits["/kursy"] == 1
+
+
+async def test_excluded_sections_are_not_crawled(site, result):
+    """Новости и вакансии не попадают в базу знаний.
+
+    Со стартовой на полигоне ведут четыре ссылки в исключённые разделы,
+    включая вложенную `/events/pro-vklad/`. Ни одна не должна быть даже
+    запрошена: раздел отсекается до постановки в очередь.
+    """
+    assert "/events/" not in paths(result)
+    assert "/events/pro-vklad/" not in paths(result)
+    assert "/vacancies/" not in paths(result)
+    assert site.hits["/events/"] == 0
+    assert site.hits["/vacancies/"] == 0
+    assert result.stats.skipped_section > 0
+
+
+async def test_skip_paths_can_be_disabled(site):
+    """Список разделов — параметр, а не приговор.
+
+    У другого банка тарифы могут лежать в /news/, поэтому отсев должен
+    выключаться снаружи без правки кода.
+    """
+    result = await crawl(site.base_url, delay=0, skip_paths=())
+    assert "/events/" in paths(result)
+    assert result.stats.skipped_section == 0
+
+
+def test_is_skipped_path_needs_full_segment():
+    """`/news/` не должен убивать `/newsletter/` — сравнение по сегменту."""
+    prefixes = ("/news/", "/events/")
+    assert is_skipped_path("https://b.tj/news/", prefixes)
+    assert is_skipped_path("https://b.tj/news", prefixes)  # без слэша
+    assert is_skipped_path("https://b.tj/events/pro-vklad/", prefixes)
+    assert not is_skipped_path("https://b.tj/newsletter/", prefixes)
+    assert not is_skipped_path("https://b.tj/tarify/", prefixes)
+
+
 async def test_canonical_collapses_pagination():
     """<link rel="canonical"> схлопывает пагинацию в одну страницу.
 
-    Ровно так устроен сайт банка: `/events/?PAGEN_1=3` объявляет
-    канонической `/events/`. Уважать это — единственный системный способ
-    не набивать базу знаний листалкой новостей.
+    Проверяется именно механизм canonical, поэтому отсев разделов здесь
+    выключен (`skip_paths=()`): у настоящей Эсхаты `/events/` в базу знаний
+    не идёт вовсе, а вот у другого банка тарифы вполне могут лежать в
+    разделе с пагинацией, и тогда работать должен canonical.
     """
     def page(canon: str, body: str) -> bytes:
         return (
@@ -532,13 +624,17 @@ async def test_canonical_collapses_pagination():
             f"<body><main>{body}</main></body></html>"
         ).encode("utf-8")
 
+    # Параметры здесь НЕ пагинационные: `?PAGEN_1=2` фильтр выбрасывает
+    # сам, и canonical проверять было бы нечем. Берём сортировку и фильтр
+    # списка — их мы не трогаем, а разными адресами одной страницы они
+    # быть не перестают.
     routes = {
         "/": Route(
             body=(
                 "<html><head><title>Асосӣ</title></head><body><main>"
                 "<a href='/events/'>Хабарҳо</a>"
-                "<a href='/events/?PAGEN_1=2'>Саҳифаи 2</a>"
-                "<a href='/events/?PAGEN_1=3'>Саҳифаи 3</a>"
+                "<a href='/events/?sort=date'>Аз рӯи сана</a>"
+                "<a href='/events/?tag=vklad'>Танҳо амонатҳо</a>"
                 "</main></body></html>"
             ).encode("utf-8")
         ),
@@ -546,7 +642,7 @@ async def test_canonical_collapses_pagination():
     }
     server = FixtureSite(routes).start()
     try:
-        result = await crawl(server.base_url, delay=0)
+        result = await crawl(server.base_url, delay=0, skip_paths=())
         events = [p for p in result.pages if "/events/" in p.url]
         assert len(events) == 1
         assert events[0].url.endswith("/events/")
@@ -654,7 +750,7 @@ async def test_oversized_page_skipped():
     [
         # сессионные параметры плодят по новому URL на каждый заход
         ("https://bank.tj/a?PHPSESSID=abc", "https://bank.tj/a"),
-        ("https://bank.tj/a?jsessionid=1&page=2", "https://bank.tj/a?page=2"),
+        ("https://bank.tj/a?jsessionid=1&lang=tj", "https://bank.tj/a?lang=tj"),
         # а похожий по названию, но значимый параметр остаётся
         ("https://bank.tj/a?_gap=1", "https://bank.tj/a?_gap=1"),
         # регистр процентного кодирования незначим
