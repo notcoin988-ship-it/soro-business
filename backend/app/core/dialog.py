@@ -31,7 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core import llm, rag
+from app.core import escalation, llm, rag
 from app.core.pii import mask
 from app.models import ChannelIdentity, Contact, Conversation, Message, Workspace
 
@@ -222,10 +222,11 @@ async def handle_incoming(
         await session.commit()
         return None
 
-    # Клиент просит человека. Полная эскалация появится вместе с
-    # core.escalation; пока переводим статус, чтобы бот замолчал.
+    # Клиент просит человека — самая понятная из четырёх причин 8.1.
     if wants_operator(text):
-        conversation.status = "operator"
+        await escalation.escalate(
+            session, conversation, escalation.REASON_USER_REQUEST
+        )
         latency_ms = int((time.monotonic() - started) * 1000)
         outgoing = await save_message(
             session,
@@ -242,15 +243,18 @@ async def handle_incoming(
             message_id=outgoing.id,
             latency_ms=latency_ms,
             escalated=True,
+            reason=escalation.REASON_USER_REQUEST,
         )
 
     # RAG и модель. В поиск и в модель уходит text_masked, а не оригинал:
     # так номер карты клиента не попадёт ни в промпт, ни в логи провайдера.
-    answer_text, chunks_used, escalate, reason = await _answer(
+    answer_text, chunks_used, needs_operator, reason = await _answer(
         session, workspace, incoming.text_masked
     )
-    if escalate:
-        conversation.status = "operator"
+    if needs_operator:
+        # Причина `llm_unavailable` в CHECK не входит и схлопнется в
+        # `no_answer` внутри модуля; наружу в Reply уходит подробная.
+        await escalation.escalate(session, conversation, reason)
 
     latency_ms = int((time.monotonic() - started) * 1000)
     outgoing = await save_message(
@@ -269,7 +273,7 @@ async def handle_incoming(
         conversation_id=conversation.id,
         message_id=outgoing.id,
         latency_ms=latency_ms,
-        escalated=escalate,
+        escalated=needs_operator,
         reason=reason,
         chunks_used=chunks_used,
     )
