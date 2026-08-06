@@ -78,13 +78,44 @@ def test_web_fragment_has_no_page():
     assert block.startswith("[1] (eskhata.com/depo/): ")
 
 
-def test_system_prompt_is_verbatim():
-    """Раздел 6.6 велит взять промпт дословно — сторож от «улучшений»."""
+def test_system_prompt_keeps_tz_rules():
+    """Правила ТЗ на месте — сторож от «улучшений» сверх согласованных."""
     prompt = llm.SYSTEM_PROMPT.format(bank_name="Банк Эсхата")
     assert prompt.startswith("Ту — Soro, ёрдамчии расмии «Банк Эсхата».")
     assert "Отвечай ТОЛЬКО на основе фрагментов в блоке <docs>" in prompt
     assert "[ESCALATE]" in prompt
+    # правило 3 вернулось к формулировке ТЗ после провалившейся правки
     assert "После каждого факта ставь ссылку вида [1], [2]" in prompt
+    assert "Не выдумывай числа" in prompt
+
+
+def test_prompt_differs_from_tz_only_where_agreed():
+    """Отход от дословного текста 6.6 — ровно в правилах 1 и 7.
+
+    Оба согласованы с тимлидом после живого прогона: модель дописывала
+    [ESCALATE] к нормальным ответам (4 раза из 5) и вставляла в текст
+    пометки в скобках. Всё остальное обязано совпадать с ТЗ построчно —
+    иначе «поправил одно, задел другое» пройдёт незамеченным.
+    """
+    ours = llm.SYSTEM_PROMPT.splitlines()
+    tz = llm.SYSTEM_PROMPT_TZ.splitlines()
+
+    changed = {line for line in tz if line not in ours}
+    # строки правила 1 и правила 7 — единственные пропавшие из версии ТЗ
+    assert changed == {
+        "   Если ответа там нет — скажи, что соединишь со",
+        "   специалистом, и добавь в конец строку [ESCALATE].",
+        "7. В конце, где уместно, задай один уточняющий вопрос.",
+    }
+
+
+def test_user_template_is_verbatim():
+    """Шаблон вопроса вернулся к ТЗ: попытка перечислить в нём
+    разрешённые ссылки чинила формат, но ломала ответ — см. комментарий
+    в llm.py."""
+    assert "{fragments}" in llm.USER_TEMPLATE
+    assert "Вопрос клиента: {question}" in llm.USER_TEMPLATE
+    assert "Разрешённые ссылки" not in llm.USER_TEMPLATE
 
 
 def test_messages_carry_question_and_docs():
@@ -168,6 +199,38 @@ def test_reason_is_pii_topic_for_account_questions():
     assert reason == llm.REASON_PII_TOPIC
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Какой у меня баланс на карте?",
+        "Почему у меня списали 90 сомони?",
+        "Мою заявку на кредит одобрили?",
+        "Разблокируйте мою карту пожалуйста",
+        "Корти ман кор намекунад, лимити ман чанд аст?",
+    ],
+)
+def test_personal_questions_are_pii_topic(question):
+    assert llm.pii_topic(question)
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # Продуктовые вопросы: слова те же, но спрашивают про ТАРИФ, а не
+        # про свои деньги. Первая версия правила ловила их все, и оператор
+        # в инбоксе видел причину «нужен доступ к данным клиента» там, где
+        # клиент просто спросил цену.
+        "Сколько стоит открытие счёта физическому лицу?",
+        "Комиссия за перевод в другой банк",
+        "Какие карты вы выпускаете?",
+        "Фоизи қарзи истеъмолӣ чанд аст?",
+        "Какая ставка по депозиту?",
+    ],
+)
+def test_product_questions_are_not_pii_topic(question):
+    assert not llm.pii_topic(question)
+
+
 def test_reason_is_no_answer_for_missing_facts():
     _, _, reason = llm.parse_answer(
         "Дар ҳуҷҷатҳо нест. [ESCALATE]", HITS, "Работаете ли вы с криптовалютой?"
@@ -241,3 +304,41 @@ async def test_broken_sse_frame_does_not_break_answer(soro):
     soro.reply = "Фоиз 14,5% [1]."
     result = await llm.answer("Фоиз?", HITS)
     assert "14,5%" in result.text
+
+
+# ---------------------------------------------------------------------------
+# ответ без текста
+# ---------------------------------------------------------------------------
+
+
+async def test_answer_of_one_citation_becomes_escalation(soro):
+    """Живой прогон: весь ответ модели — «[1]», без единого слова.
+
+    Клиент получил бы пустое сообщение и решил, что бот сломался.
+    Отдаём вежливую фразу и уводим к оператору.
+    """
+    soro.reply = "[1]"
+    result = await llm.answer("Какой кэшбэк по карте Visa Gold?", HITS)
+
+    assert result.escalate
+    assert len(result.text) > 30
+    assert result.text == llm.EMPTY_ANSWER_REPLY
+
+
+async def test_answer_of_only_marker_becomes_escalation(soro):
+    """То же для ответа из одного [ESCALATE]: маркер вырежется, а текста
+    под ним нет."""
+    soro.reply = "[ESCALATE]"
+    result = await llm.answer("Банк работает с криптовалютой?", HITS)
+
+    assert result.escalate
+    assert result.text == llm.EMPTY_ANSWER_REPLY
+
+
+async def test_normal_answer_is_not_replaced(soro):
+    """Сторож от чрезмерной подозрительности: обычный ответ не трогаем."""
+    soro.reply = "Комиссия не взимается [1]."
+    result = await llm.answer("Сколько стоит открытие счёта?", HITS)
+
+    assert not result.escalate
+    assert result.text == "Комиссия не взимается [1]."
