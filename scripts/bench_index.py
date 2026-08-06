@@ -42,6 +42,7 @@ CHUNK_TOKENS = 400
 OVERLAP_TOKENS = 60
 BATCH = 32
 LIMIT_SEC = 180  # «< 3 минут»
+NORM_PAGES = 40  # норматив сформулирован на 40 страницах
 
 
 def load_tokenizer():
@@ -198,7 +199,7 @@ def main() -> int:
     if ocr_pages:
         # для скана правит бал не эмбеддинг, а распознавание
         per_page = parse_sec / max(len(pages), 1)
-        est = per_page * 40
+        est = per_page * NORM_PAGES
         print(f"цена страницы в OCR:  {per_page:.1f} сек")
         print(
             f"прогноз: 40-страничный СКАН → ~{est:.0f} сек только на "
@@ -209,8 +210,12 @@ def main() -> int:
         return 0
 
     for density_chars in (2000, 2500, 3000):
+        # NORM_PAGES, а не len(pages): пересчитываем замер на норматив.
+        # Раньше здесь стояло len(pages) — прогноз молча считался для
+        # длины измеренного файла, и 12-страничный тариф давал «40 стр. →
+        # 37 сек» вместо честных ~118.
         est_chunks = max(
-            len(pages), round(density_chars * len(pages) / chars_per_chunk)
+            NORM_PAGES, round(density_chars * NORM_PAGES / chars_per_chunk)
         )
         est = est_chunks * per_chunk
         verdict = "ок" if est < LIMIT_SEC else "ВЫХОД ЗА НОРМАТИВ"
