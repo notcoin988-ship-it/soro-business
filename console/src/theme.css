@@ -25,27 +25,33 @@
 .text:focus { outline: none; border-color: var(--rose-dim); }
 .text::placeholder { color: var(--muted2); }
 
-/* Файловое поле скрыто намеренно. Нативный input[type=file] рисует свою
-   надпись средствами браузера, и она берётся из локали системы: на
-   китайской сборке Windows это «选择文件». Ни перевести, ни заменить её
-   из CSS нельзя — только спрятать поле и открывать диалог по кнопке
-   «Загрузить документы», как и нарисовано в эталоне.
+/* Загрузка файла: настоящий input[type=file] лежит ПОВЕРХ кнопки и
+   прозрачен. Человек видит кнопку эталона, а кликает физически по полю —
+   диалог открывает сам браузер, никакого JS и никаких посредников.
 
-   НЕ display:none: такой элемент часть браузеров считает неактивным и
-   активацию по <label> игнорирует — диалог не открывается вовсе. Прячем
-   общепринятым для доступности способом: элемент остаётся в потоке и
-   кликабельным, но его не видно. */
-.file {
-  position: absolute; width: 1px; height: 1px;
-  opacity: 0; overflow: hidden; clip-path: inset(50%);
+   Почему так, а не скрытое поле с кнопкой или <label for>: и
+   программный `input.click()`, и активация по label в Chrome могут молча
+   не сработать (в Edge при этом всё открывается) — ошибки никакой, диалог
+   просто не появляется. Клик по самому полю обмануть нечем.
+
+   Прятать сам input приходится потому, что его надпись рисует браузер по
+   локали системы: на китайской сборке Windows это «选择文件», и ни
+   перевести, ни заменить её из CSS нельзя. */
+.upload { position: relative; display: inline-block; }
+.upload .file {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  opacity: 0; cursor: pointer; font-size: 0;
 }
-
-/* <label> в роли кнопки. У .btn в эталоне display не задан — у кнопки он
-   inline-block по умолчанию, у label нет, и без этого правила высота
-   уезжает относительно соседних кнопок. */
-.aslabel { display: inline-block; user-select: none; }
-/* у <label> нет атрибута disabled — гасим классом */
-.aslabel.off { pointer-events: none; opacity: .5; }
+.upload .file:disabled { cursor: default; }
+/* подсветка кнопки при наведении на невидимое поле поверх неё */
+.upload .file:hover + .btn { filter: brightness(1.1); }
+.upload .file:focus-visible + .btn { outline: 2px solid var(--rose); outline-offset: 2px; }
+/* .btn здесь <span>, а он строчный: без inline-block обёртка не получает
+   его высоту с паддингами, и поле поверх выходит ниже кнопки — по краям
+   клик уходит мимо.
+   pointer-events: none — чтобы кнопка не перехватывала клик на себя. */
+.upload .btn { display: inline-block; pointer-events: none; }
+.upload .btn:disabled { opacity: .5; }
 
 .fail { color: var(--rose-hi); font-size: 12px; }
 .linkbtn {
@@ -53,6 +59,36 @@
   font-size: 11.5px; cursor: pointer; padding: 0;
 }
 .linkbtn:hover { color: var(--rose-hi); }
+
+/* --- подтверждение действия (в эталоне диалога нет, палитра его) --- */
+
+.backdrop {
+  position: fixed; inset: 0; z-index: 50;
+  display: grid; place-items: center; padding: 20px;
+  background: rgba(9, 4, 8, .72);
+  animation: fade .16s ease;
+}
+@keyframes fade { from { opacity: 0 } to { opacity: 1 } }
+
+.modal {
+  width: min(420px, 100%);
+  padding: 22px 24px 18px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .55), inset 0 1px 0 rgba(255,255,255,.04);
+  animation: rise .18s cubic-bezier(.2, .7, .3, 1);
+}
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px) scale(.985) }
+  to   { opacity: 1; transform: none }
+}
+
+.modal h2 {
+  font-family: 'Unbounded', sans-serif; font-size: 15px; font-weight: 500;
+  margin: 0 0 8px; letter-spacing: -.005em;
+}
+.modal p {
+  margin: 0 0 18px; font-size: 12.5px; line-height: 1.5; color: var(--muted);
+}
+.modal-actions { display: flex; gap: 9px; justify-content: flex-end; }
 
 /* --- таблица базы знаний: корзина, шеврон, страницы сайта --- */
 
