@@ -54,6 +54,7 @@ from app.config import settings
 from app.core import audit, context, llm, policy
 from app.core.dialog import (
     NO_ANSWER_REPLY,
+    REPEAT_REPLY,
     get_workspace,
     search_in_context,
     smalltalk_reply,
@@ -314,6 +315,15 @@ async def stream(
             raw = "".join(pieces)
             text, escalated, reason = llm.parse_answer(raw, found.hits, question)
             chunks_used = llm.cited_chunk_ids(text, found.hits)
+
+            if context.is_repeat(text, history, question):
+                # Модель пересказала свой прошлый ответ — нового во
+                # фрагментах нет. Куски уже ушли в поток, и `final` их
+                # заменит: на экране это заметно, но честнее, чем в
+                # третий раз показать клиенту тот же абзац.
+                text, escalated, reason = REPEAT_REPLY, True, llm.REASON_NO_ANSWER
+                chunks_used = []
+
             if not policy.enabled(workspace, policy.CITE_SOURCES):
                 text = llm.strip_citations(text)
                 chunks_used = []

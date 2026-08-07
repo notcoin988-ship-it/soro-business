@@ -297,3 +297,135 @@ async def test_condense_rejects_wordy_rewrite(soro):
     """Слишком много слов — уже не вопрос, а пересказ."""
     soro(condensed=" ".join(["насб"] * (llm.CONDENSE_MAX_WORDS + 1)))
     assert await llm.condense_question(HISTORY, "не чи гуна?") == "не чи гуна?"
+
+
+# ---------------------------------------------------------------------------
+# повтор ответа
+# ---------------------------------------------------------------------------
+
+
+ANSWER = (
+    "Шумо метавонед кортро дар барномаи мобилии «Эсхата Онлайн», ки "
+    "мушаххаскуниро гузаштааст, дастрас намоед. Оё мехоҳед маълумоти "
+    "бештар гиред?"
+)
+SAID = [Turn("user", "чигуна корти милли дархост кунам"), Turn("assistant", ANSWER)]
+
+
+def test_verbatim_repeat_is_caught():
+    """Живая поломка: на «бале» приходил тот же абзац слово в слово."""
+    assert context.is_repeat(ANSWER, SAID, "бале")
+
+
+def test_repeat_with_new_intro_is_caught():
+    """Модель переставляет вступление, но текст тот же.
+
+    Точное сравнение такой повтор пропустило бы — отсюда порог сходства,
+    а не равенство строк.
+    """
+    assert context.is_repeat("Хуб, пас " + ANSWER, SAID, "бале")
+
+
+def test_repeat_ignores_citation_numbers():
+    """Ссылки [1] и [2] не делают ответ новым."""
+    assert context.is_repeat(ANSWER.replace("намоед.", "намоед [2]."), SAID, "бале")
+
+
+def test_new_answer_is_not_a_repeat():
+    other = (
+        "Барои насб кардани барнома камераи телефонро ба рамзи QR равона "
+        "кунед ва тугмаи «Установить»-ро пахш намоед."
+    )
+    assert not context.is_repeat(other, SAID, "чи гуна насб кунам?")
+
+
+def test_same_question_may_get_same_answer():
+    """ВАЖНОЕ ИСКЛЮЧЕНИЕ: клиент спросил то же самое.
+
+    Тогда повтор ответа — правильное поведение: человек мог не дочитать
+    или вернуться к разговору позже. Отвечать ему «я уже говорил» было
+    бы хамством.
+    """
+    assert not context.is_repeat(ANSWER, SAID, "чигуна корти милли дархост кунам")
+
+
+def test_short_answers_are_not_compared():
+    """«Бале.» и «Хайр.» похожи по буквам, но повтором не являются."""
+    short = [Turn("user", "а?"), Turn("assistant", "Бале, албатта.")]
+    assert not context.is_repeat("Хайр, албатта.", short, "боз?")
+
+
+def test_empty_history_is_never_a_repeat():
+    assert not context.is_repeat(ANSWER, [], "бале")
+
+
+# ---------------------------------------------------------------------------
+# согласие: «бале» = тема, которую предложил бот
+# ---------------------------------------------------------------------------
+
+
+OFFERED = [
+    Turn("user", "чигуна корти милли дархост кунам"),
+    Turn(
+        "assistant",
+        "Барои фармоиш ба шуъба муроҷиат намоед. Оё мехоҳед маълумоти "
+        "бештар дар бораи барномаи мобилии «Эсхата Онлайн» гиред? [1]",
+    ),
+]
+
+
+def test_offered_topic_is_the_last_question():
+    """Берём последнее вопросительное предложение бота — на него и
+    отвечает клиент. Предыдущие предложения в запрос не тащим."""
+    topic = context.offered_topic(OFFERED)
+
+    assert topic == (
+        "Оё мехоҳед маълумоти бештар дар бораи барномаи мобилии "
+        "«Эсхата Онлайн» гиред"
+    )
+    assert "муроҷиат" not in topic, "в запрос уехал весь абзац"
+    assert "[1]" not in topic, "ссылка уехала в поисковый запрос"
+
+
+def test_offered_topic_empty_without_question():
+    assert context.offered_topic([Turn("assistant", "Просто ответ.")]) == ""
+    assert context.offered_topic([]) == ""
+
+
+def test_citations_are_stripped_from_condense_history():
+    """В переписыватель история идёт без ссылок: один раз «[1]» уже
+    уехало прямо в поисковый запрос."""
+    text = context.as_dialogue(OFFERED, "бале")
+    assert "[1]" not in text
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("бале", True),
+        ("Бале!", True),
+        ("ҳа", True),
+        ("да", True),
+        ("Хорошо", True),
+        ("ok", True),
+        # содержательная реплика — не согласие, подменять её темой нельзя
+        ("да, а сколько стоит?", False),
+        ("нет", False),
+        ("бале, лекин чанд пул?", False),
+    ],
+)
+def test_affirmation_detection(text, expected):
+    from app.core import phrases
+
+    assert phrases.is_affirmation(text) is expected
+
+
+def test_repeated_affirmation_is_a_repeat():
+    """Два «бале» подряд — не «тот же вопрос».
+
+    Во второй раз клиент соглашается на НОВОЕ предложение бота, и если
+    ответ тот же — боту сказать нечего. Первая версия исключения этого не
+    различала, и живой прогон дал четыре одинаковых ответа подряд.
+    """
+    said = [Turn("user", "бале"), Turn("assistant", ANSWER)]
+    assert context.is_repeat(ANSWER, said, "бале")

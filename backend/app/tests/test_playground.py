@@ -409,3 +409,69 @@ async def test_thread_cap_drops_oldest(client, knowledge, soro):
 
     assert len(playground._threads) <= playground.MAX_THREADS
     assert "t0" not in playground._threads, "самая старая ветка осталась"
+
+
+async def test_repeated_answer_hands_over_to_operator(client, knowledge, monkeypatch):
+    """Модель пересказала себя — зовём человека вместо третьего повтора.
+
+    Живая поломка: бот задавал уточняющий вопрос (правило 7 промпта), на
+    «бале» приходил тот же абзац, и так три раза подряд.
+    """
+    reply = (
+        "Ҷуброни пеш аз мӯҳлат аз рӯи фоизи дархостӣ ҳисоб мешавад, "
+        "ва ин шарт барои ҳамаи амонатҳо амал мекунад [1]."
+    )
+    server = FakeSoro(reply=reply).start()
+    monkeypatch.setattr(llm.settings, "SORO_API_URL", server.base_url, raising=False)
+    try:
+        first = dict(await ask(client, "Ҷуброн чӣ хел ҳисоб мешавад?", thread_id="t1"))
+        second = dict(await ask(client, "бале", thread_id="t1"))
+    finally:
+        server.stop()
+
+    assert first["final"]["text"] == reply
+    assert second["final"]["escalated"]
+    assert second["final"]["reason"] == llm.REASON_NO_ANSWER
+    assert second["final"]["text"] != reply
+    assert second["final"]["chunks_used"] == []
+
+
+async def test_same_question_twice_gets_the_same_answer(client, knowledge, soro):
+    """Клиент повторил вопрос — повтор ответа здесь правильный."""
+    first = dict(await ask(client, "Фоизи амонат чанд аст?", thread_id="t1"))
+    second = dict(await ask(client, "Фоизи амонат чанд аст?", thread_id="t1"))
+
+    assert second["final"]["text"] == first["final"]["text"]
+    assert not second["final"]["escalated"]
+
+
+async def test_affirmation_searches_the_offered_topic(client, knowledge, monkeypatch):
+    """«Бале» ищется как тема, которую предложил бот, и без вызова модели.
+
+    Раньше на согласие поиск шёл по слову «бале» (оценка 0,001) и клиент
+    получал оператора вместо продолжения разговора.
+    """
+    # Порог поднят: иначе «бале» само по себе проходит его по косинусу и
+    # второй попытки не случается вовсе.
+    monkeypatch.setattr(playground.settings, "RAG_MIN_SCORE", 0.5, raising=False)
+    server = FakeSoro(
+        reply=(
+            "Фоизи солона 14,5% [1]. Оё мехоҳед дар бораи ҷуброни пеш аз "
+            "мӯҳлат маълумот гиред?"
+        )
+    ).start()
+    monkeypatch.setattr(llm.settings, "SORO_API_URL", server.base_url, raising=False)
+    try:
+        await ask(client, "Фоизи амонат чанд аст?", thread_id="t1")
+        before = len(server.requests)
+        events = dict(await ask(client, "бале", thread_id="t1"))
+    finally:
+        server.stop()
+
+    retrieval = events["retrieval"]
+    assert retrieval["rewritten"]
+    assert retrieval["searched"] == (
+        "Оё мехоҳед дар бораи ҷуброни пеш аз мӯҳлат маълумот гиред"
+    )
+    # ровно один новый запрос — генерация; переписыватель не звался
+    assert len(server.requests) - before == 1

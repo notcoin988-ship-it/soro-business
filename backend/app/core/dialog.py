@@ -99,6 +99,15 @@ LLM_DOWN_REPLY = (
     "Сейчас не могу ответить, соединяю со специалистом."
 )
 
+# Модель пересказала свой прошлый ответ — значит нового во фрагментах нет.
+# Отдать тот же абзац в третий раз хуже, чем честно позвать человека:
+# именно так выглядела поломка, когда на «бале» подряд приходил один и
+# тот же текст.
+REPEAT_REPLY = (
+    "Маълумоти иловагӣ дар ҳуҷҷатҳои бонк нест — мутахассисро пайваст мекунам.\n"
+    "Дополнительных сведений в документах банка нет — соединяю со специалистом."
+)
+
 
 @dataclass
 class Reply:
@@ -309,6 +318,20 @@ async def search_in_context(
     if found.has_answer or not history:
         return Found(found, question)
 
+    # Согласие («бале», «да») разбираем сами, без модели: смысл такой
+    # реплики целиком в вопросе, на который отвечают, и гадать не о чем.
+    # Модель на этом месте вела себя непредсказуемо — то переписывала в
+    # тему, то возвращала «бале» как есть, и тогда поиск шёл по слову
+    # «бале» с оценкой 0,001.
+    if phrases.is_affirmation(question):
+        topic = context.offered_topic(history)
+        if topic:
+            agreed = await rag.search(session, topic, workspace_id)
+            if agreed.has_answer:
+                log.info("согласие раскрыто в тему: %r", topic)
+                return Found(agreed, topic, rewritten=True)
+        return Found(found, question)
+
     standalone = await llm.condense_question(history, question)
     if standalone.strip().casefold() == question.strip().casefold():
         # переписывать было нечего — модель вернула реплику как есть
@@ -498,6 +521,14 @@ async def _answer(
         return LLM_DOWN_REPLY, [], True, "llm_unavailable"
 
     text, chunks_used = result.text, result.chunks_used
+
+    if context.is_repeat(text, history or [], question):
+        # Нового во фрагментах нет — модель просто пересказала себя.
+        # Проверяем ПЕРЕД записью в аудит и до всех прочих правок, чтобы
+        # в лог ушёл тот ответ, который увидит клиент.
+        log.info("модель повторила прошлый ответ, зовём оператора")
+        return REPEAT_REPLY, [], True, llm.REASON_NO_ANSWER
+
     if not policy.enabled(workspace, policy.CITE_SOURCES):
         # Ссылки выключены в контуре безопасности: убираем и номера из
         # текста, и chunks_used — иначе канал нарисует бейджи, которых
