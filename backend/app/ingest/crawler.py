@@ -162,6 +162,7 @@ class CrawlStats:
     skipped_offdomain: int = 0  # ссылка/редирект на чужой домен
     skipped_asset: int = 0      # не-HTML (см. assets)
     skipped_section: int = 0    # раздел из skip_paths: новости, вакансии
+    language_variants: int = 0  # найдено других языковых версий сайта
     skipped_depth: int = 0      # страниц, дальше которых не пошли по глубине
     skipped_dup: int = 0        # уже видели после нормализации
     skipped_dup_text: int = 0   # другой адрес, но текст слово в слово тот же
@@ -249,19 +250,77 @@ def normalize_url(url: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, path, parts.query, ""))
 
 
-def same_domain(url: str, root: str) -> bool:
-    """Тот же хост (и порт), что у стартового URL.
+def language_variants(html: str, page_url: str) -> list[str]:
+    """Адреса других языковых версий этой же страницы.
 
-    Поддомены считаем чужими: `blog.eskhata.tj` — это другой сайт с другой
-    вёрсткой, а лимит 150 страниц один на всех. Если тимлид решит иначе —
-    правится здесь одной строкой.
+    ЗАЧЕМ. У Эсхаты русская версия на `eskhata.com`, таджикская — на
+    `tj.eskhata.com`. Обычным обходом вторую не найти по двум причинам
+    сразу: это поддомен (для `same_domain` — чужой сайт), а переключатель
+    языков сделан не ссылкой, а выпадающим списком:
+
+        <select name="language">
+          <option value="https://tj.eskhata.com/"> Tоҷикӣ</option>
+        </select>
+
+    По `a[href]` такое не находится никогда. Поэтому смотрим отдельно.
+
+    Два источника, оба дешёвые:
+      * `link[rel=alternate][hreflang]` — стандарт. У Эсхаты его нет, но у
+        следующего банка вполне может быть, и это первое, что стоит
+        проверить;
+      * `select[name=language] option[value]` — случай Битрикса, на
+        котором сидит Эсхата.
+
+    Возвращаем только абсолютные http(s)-адреса: `option value=""`
+    означает «текущий язык», а относительные пути — это уже обычные
+    ссылки, их найдёт `_links`.
+    """
+    from selectolax.parser import HTMLParser
+
+    tree = HTMLParser(html)
+    found: list[str] = []
+
+    for node in tree.css("link[rel=alternate][hreflang]"):
+        href = (node.attributes.get("href") or "").strip()
+        if href:
+            found.append(urljoin(page_url, href))
+
+    for node in tree.css("select[name=language] option[value]"):
+        value = (node.attributes.get("value") or "").strip()
+        if value.startswith(("http://", "https://")):
+            found.append(value)
+
+    out: list[str] = []
+    for url in found:
+        clean = clean_url(url)
+        if urlsplit(clean).scheme in ("http", "https") and clean not in out:
+            out.append(clean)
+    return out
+
+
+def host_of(url: str) -> str:
+    """Хост нормализованного адреса. Один способ на весь модуль."""
+    return urlsplit(normalize_url(url)).netloc
+
+
+def same_domain(url: str, root: str, allowed: set[str] | None = None) -> bool:
+    """Свой ли это сайт.
+
+    Поддомены по умолчанию чужие: `blog.eskhata.tj` — другой сайт с другой
+    вёрсткой, а лимит 150 страниц один на всех.
+
+    Исключение — языковые версии. `allowed` содержит хосты, найденные
+    через `language_variants`: у Эсхаты таджикская версия живёт на
+    `tj.eskhata.com`, и без этого списка она осталась бы за бортом.
+    Пустой `allowed` даёт ровно прежнее поведение.
 
     Сравниваем netloc уже нормализованных URL, поэтому `site` и `site:443`
     под https — одно и то же.
     """
-    return urlsplit(normalize_url(url)).netloc == urlsplit(
-        normalize_url(root)
-    ).netloc
+    host = host_of(url)
+    if host == host_of(root):
+        return True
+    return bool(allowed) and host in allowed
 
 
 def looks_like_asset(url: str) -> bool:
@@ -324,6 +383,7 @@ async def crawl(
     verify: bool = True,
     client: httpx.AsyncClient | None = None,
     skip_paths: tuple[str, ...] = SKIP_PATH_PREFIXES,
+    follow_language_variants: bool = True,
 ) -> CrawlResult:
     """Обход в ширину от `start_url`. Возвращает страницы, лог и счётчики.
 
@@ -333,6 +393,12 @@ async def crawl(
     `skip_paths` — разделы, которые не нужны в базе знаний. Пустой кортеж
     отключает отсев: сайт другого банка может держать тарифы прямо в
     /news/, и тогда список задаётся снаружи, а код не трогается.
+
+    `follow_language_variants` — обходить ли другие языковые версии сайта
+    (см. `language_variants`). У Эсхаты таджикская версия на отдельном
+    поддомене, и без этого база знаний остаётся одноязычной, а таджикские
+    вопросы ищут по русским документам, теряя около 0,19 близости.
+    ВНИМАНИЕ: лимит `max_pages` общий на все языки, они его делят.
     """
     result = CrawlResult()
     started = time.monotonic()
@@ -372,6 +438,9 @@ async def crawl(
         processed: set[str] = set()
         # хеш текста → глубина, на которой этот текст встретился впервые
         seen_text: dict[str, int] = {}
+        # хосты языковых версий: пополняется на стартовой странице и
+        # расширяет понятие «свой сайт» для `same_domain`
+        allowed_hosts: set[str] = set()
         first_request = True
         # для диагностики JS-сайтов: сколько разметки скачали и сколько
         # полезного текста из неё достали
@@ -421,7 +490,7 @@ async def crawl(
 
             final_url = clean_url(str(response.url))
             final_key = normalize_url(final_url)
-            if depth == 0 and not same_domain(final_url, root):
+            if depth == 0 and not same_domain(final_url, root, allowed_hosts):
                 # Стартовая страница имеет право переехать: eskhata.tj
                 # редиректит на eskhata.com, и обход по исходному правилу
                 # умирал на первом же запросе. Домен переопределяем по
@@ -431,7 +500,7 @@ async def crawl(
                 robots = await load_robots(client, root)
                 pause = max(delay, _crawl_delay(robots))
                 seen.add(final_key)
-            if not same_domain(final_url, root):
+            if not same_domain(final_url, root, allowed_hosts):
                 result.stats.skipped_offdomain += 1
                 result.log.append(f"[редирект наружу] {url} → {response.url}")
                 continue
@@ -473,10 +542,24 @@ async def crawl(
             html = _decode(response)
             canonical, noindex, nofollow = page_directives(html, final_url)
 
+            # Языковые версии ищем только на стартовой странице: они
+            # перечислены в шапке, и повторять разбор на каждой из 150
+            # страниц незачем.
+            if follow_language_variants and depth == 0:
+                for variant in language_variants(html, final_url):
+                    key = normalize_url(variant)
+                    if key in seen:
+                        continue
+                    allowed_hosts.add(host_of(variant))
+                    seen.add(key)
+                    queue.append((variant, 0))
+                    result.stats.language_variants += 1
+                    result.log.append(f"[языковая версия] {variant}")
+
             # canonical: сайт сам говорит, какой у страницы настоящий адрес.
             # Для Битрикса это штатный способ сказать «?PAGEN_1=3 — это всё
             # та же /events/», и он решает проблему пагинации системно.
-            if canonical and same_domain(canonical, root):
+            if canonical and same_domain(canonical, root, allowed_hosts):
                 canon_key = normalize_url(canonical)
                 if canon_key != final_key:
                     if canon_key in processed:
@@ -543,7 +626,7 @@ async def crawl(
             if nofollow:
                 result.log.append(f"[nofollow] ссылки с {final_url} не берём")
                 continue
-            for link in _links(html, final_url, root, result, skip_paths):
+            for link in _links(html, final_url, root, result, skip_paths, allowed_hosts):
                 key = normalize_url(link)
                 if key in seen:
                     result.stats.skipped_dup += 1
@@ -680,6 +763,7 @@ def _links(
     root: str,
     result: CrawlResult,
     skip_paths: tuple[str, ...] = SKIP_PATH_PREFIXES,
+    allowed_hosts: set[str] | None = None,
 ) -> list[str]:
     """Ссылки со страницы: свой домен, не ассеты, нормализованные.
 
@@ -713,7 +797,7 @@ def _links(
         absolute = clean_url(urljoin(page_url, href))
         if urlsplit(absolute).scheme not in ("http", "https"):
             continue
-        if not same_domain(absolute, root):
+        if not same_domain(absolute, root, allowed_hosts):
             result.stats.skipped_offdomain += 1
             continue
         if looks_like_asset(absolute):
@@ -795,6 +879,7 @@ def format_report(result: CrawlResult) -> str:
             f"чужой домен:            {s.skipped_offdomain}",
             f"не-HTML (см. assets):   {s.skipped_asset}",
             f"исключённые разделы:    {s.skipped_section}",
+            f"языковых версий:        {s.language_variants}",
             f"дубли URL:              {s.skipped_dup}",
             f"копии по тексту:        {s.skipped_dup_text}",
             f"ошибок загрузки:        {s.errors}",

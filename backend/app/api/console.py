@@ -33,6 +33,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core import audit, policy
 from app.core.dialog import get_workspace
 from app.db import get_session
 from app.models import Chunk, Document
@@ -93,9 +94,69 @@ async def _create(
         status="queued",
     )
     session.add(document)
+    await session.flush()
+    await audit.record(
+        session,
+        workspace,
+        audit.EVENT_DOC_ADD,
+        {
+            "document_id": document.id,
+            "kind": kind,
+            "title": title,
+            "source_url": source_url,
+        },
+    )
     await session.commit()
     enqueue(document.id)
     return document
+
+
+# ---------------------------------------------------------------------------
+# воркспейс и контур безопасности (экран 01)
+# ---------------------------------------------------------------------------
+
+
+class SecurityIn(BaseModel):
+    """Изменения переключателей. Присылают только то, что дёрнули."""
+
+    cite_sources: bool | None = None
+    audit_log: bool | None = None
+    mask_pii: bool | None = None
+
+
+@router.get("/workspace")
+async def get_workspace_info(
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Всё, что консоли нужно знать о воркспейсе.
+
+    `model` отдаём отсюда, а не хардкодим на фронте: в эталоне написано
+    «Soro-27B · FP8», а на сервере крутится GPTQ-int4, и подпись на демо
+    перед ИТ-службой банка обязана совпадать с тем, что реально отвечает.
+    """
+    workspace = await get_workspace(session)
+    return {
+        "slug": workspace.slug,
+        "name": workspace.name,
+        "model": settings.SORO_MODEL,
+        "security": policy.security(workspace),
+    }
+
+
+@router.put("/workspace/security")
+async def update_security(
+    payload: SecurityIn, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """Переключатели контура безопасности.
+
+    `kb_only` менять нельзя и в схему он не входит: «отвечать только по
+    базе знаний» — это и есть продукт, а не настройка (см. `core/policy`).
+    """
+    workspace = await get_workspace(session)
+    changes = payload.model_dump(exclude_none=True)
+    flags = policy.apply(workspace, changes)
+    await session.commit()
+    return {"security": flags}
 
 
 @router.post("/documents", response_model=DocumentOut, status_code=201)

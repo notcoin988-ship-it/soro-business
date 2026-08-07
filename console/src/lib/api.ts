@@ -76,6 +76,37 @@ export function addSite(url: string): Promise<Doc> {
   });
 }
 
+// --- воркспейс и контур безопасности (экран 01) ---------------------------
+
+export interface Security {
+  kb_only: boolean;
+  cite_sources: boolean;
+  audit_log: boolean;
+  mask_pii: boolean;
+}
+
+export interface WorkspaceInfo {
+  slug: string;
+  name: string;
+  // настоящее имя модели с сервера: в эталоне написано «Soro-27B · FP8»,
+  // а отвечает GPTQ-int4, и подпись на демо должна совпадать с фактом
+  model: string;
+  security: Security;
+}
+
+export function getWorkspace(): Promise<WorkspaceInfo> {
+  return request<WorkspaceInfo>("/workspace");
+}
+
+export function setSecurity(
+  changes: Partial<Omit<Security, "kb_only">>,
+): Promise<{ security: Security }> {
+  return request<{ security: Security }>("/workspace/security", {
+    method: "PUT",
+    body: JSON.stringify(changes),
+  });
+}
+
 export async function deleteDocument(id: number): Promise<void> {
   const response = await fetch(`${API_BASE}/documents/${id}`, {
     method: "DELETE",

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import time
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -22,6 +23,7 @@ from app.ingest.crawler import (
     crawl,
     format_report,
     is_skipped_path,
+    language_variants,
     looks_like_asset,
     normalize_url,
     same_domain,
@@ -525,6 +527,106 @@ async def test_start_url_without_slash_is_retried_with_slash():
         assert any("пробую со слэшем" in line for line in result.log)
     finally:
         server.stop()
+
+
+# ---------------------------------------------------------------------------
+# языковые версии сайта
+# ---------------------------------------------------------------------------
+
+
+def test_language_variants_from_select():
+    """Переключатель языков у Битрикса — <select>, а не ссылка.
+
+    Именно так устроена Эсхата: таджикская версия на tj.eskhata.com
+    указана в `option value`, и по `a[href]` её не найти никогда.
+    """
+    html = (
+        "<html><body><select name='language'>"
+        "<option disabled>Русский</option>"
+        "<option value=''>Русский</option>"
+        "<option value='https://tj.bank.tj/'> Тоҷикӣ</option>"
+        "</select></body></html>"
+    )
+    assert language_variants(html, "https://bank.tj/") == ["https://tj.bank.tj/"]
+
+
+def test_language_variants_from_hreflang():
+    """Стандартный способ. У Эсхаты его нет, у следующего банка может быть."""
+    html = (
+        "<html><head>"
+        "<link rel='alternate' hreflang='tg' href='/tj/'>"
+        "<link rel='alternate' hreflang='en' href='https://en.bank.tj/'>"
+        "</head><body></body></html>"
+    )
+    assert language_variants(html, "https://bank.tj/") == [
+        "https://bank.tj/tj/",
+        "https://en.bank.tj/",
+    ]
+
+
+def test_language_variants_ignores_current_language():
+    """`option value=''` — это текущий язык, не другая версия."""
+    html = "<select name='language'><option value=''>Русский</option></select>"
+    assert language_variants(html, "https://bank.tj/") == []
+
+
+async def test_crawler_follows_language_variant():
+    """Обе версии обходятся одним заданием.
+
+    Без этого база знаний остаётся одноязычной: таджикские вопросы ищут
+    по русским документам и теряют около 0,19 близости.
+    """
+    ru = FixtureSite(
+        {
+            "/": Route(
+                body=html(
+                    "<h1>Тарифы</h1><p>Ставка 14,5%.</p>", title="Главная"
+                )
+            )
+        }
+    ).start()
+    try:
+        tj = FixtureSite(
+            {
+                "/": Route(
+                    body=html("<h1>Тарифҳо</h1><p>Фоиз 14,5%.</p>", title="Асосӣ")
+                )
+            }
+        ).start()
+        try:
+            # переключатель языков на русской версии ведёт на таджикскую
+            ru.routes["/"] = Route(
+                body=html(
+                    "<h1>Тарифы</h1><p>Ставка 14,5%.</p>"
+                    f"<select name='language'><option value=''>Русский</option>"
+                    f"<option value='{tj.base_url}/'>Тоҷикӣ</option></select>",
+                    title="Главная",
+                )
+            )
+            result = await crawl(ru.base_url, delay=0)
+
+            hosts = {urlsplit(page.url).netloc for page in result.pages}
+            assert len(hosts) == 2, f"обошли только {hosts}"
+            assert result.stats.language_variants == 1
+            assert any("Фоиз" in page.text for page in result.pages)
+        finally:
+            tj.stop()
+    finally:
+        ru.stop()
+
+
+async def test_language_variants_can_be_disabled(site):
+    """Выключатель возвращает прежнее поведение — один сайт, один язык."""
+    result = await crawl(site.base_url, delay=0, follow_language_variants=False)
+    assert result.stats.language_variants == 0
+
+
+def test_same_domain_allows_only_listed_hosts():
+    """Поддомен становится своим, только если он найден как языковая
+    версия. Иначе `blog.bank.tj` утащил бы обход в чужой раздел."""
+    assert same_domain("https://tj.bank.tj/x", "https://bank.tj/", {"tj.bank.tj"})
+    assert not same_domain("https://blog.bank.tj/x", "https://bank.tj/", {"tj.bank.tj"})
+    assert not same_domain("https://tj.bank.tj/x", "https://bank.tj/", set())
 
 
 # ---------------------------------------------------------------------------

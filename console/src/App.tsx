@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { WorkspaceInfo, getWorkspace } from "./lib/api";
 import Login from "./screens/Login";
 import Overview from "./screens/Overview";
 import Knowledge from "./screens/Knowledge";
@@ -58,6 +59,17 @@ function Topbar() {
 export default function App() {
   const [authorized, setAuthorized] = useState(false);
   const [current, setCurrent] = useState<string>("ov");
+  const [info, setInfo] = useState<WorkspaceInfo | null>(null);
+
+  // Подпись в футере навигации должна отражать факт, а не эталон: там
+  // зашиты «Soro-27B · FP8» и «Аудит-лог включён», а на сервере GPTQ-int4,
+  // и аудит теперь выключается переключателем на экране 01.
+  useEffect(() => {
+    if (!authorized) return;
+    getWorkspace()
+      .then(setInfo)
+      .catch(() => setInfo(null));
+  }, [authorized, current]);
 
   if (!authorized) return <Login onDone={() => setAuthorized(true)} />;
 
@@ -78,11 +90,11 @@ export default function App() {
             </button>
           ))}
           <div className="navfoot">
-            Модель <b>Soro-27B · FP8</b>
+            Модель <b>{info ? info.model.split("/").pop() : "…"}</b>
             <br />
             Хостинг <b>Душанбе, on-prem</b>
             <br />
-            Аудит-лог <b>включён</b>
+            Аудит-лог <b>{info?.security.audit_log === false ? "выключен" : "включён"}</b>
             <br />
             Аптайм 30 дн <b>99,94%</b>
           </div>
