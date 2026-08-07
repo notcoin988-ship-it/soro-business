@@ -123,7 +123,7 @@ async def run_cases(
             needle = normalize(case.must_contain)
             case.found = any(needle in normalize(hit.text) for hit in result.hits)
 
-        if with_model and result.hits and case.best_score >= threshold:
+        if with_model and result.hits and case.best_score >= effective(case, threshold):
             try:
                 answer = await llm.answer(
                     case.question, result.hits, bank_name=bank_name
@@ -145,6 +145,12 @@ def recall_at_3(cases: list[Case]) -> tuple[int, int]:
     return sum(1 for c in group if c.found), len(group)
 
 
+def effective(case: "Case", threshold: float) -> float:
+    """Порог, применяемый к вопросу. Считается ровно как в core/rag.py —
+    расхождение сделало бы калибровку слепой."""
+    return threshold
+
+
 def score_at(cases: list[Case], threshold: float) -> dict:
     """Что получится при данном пороге."""
     answer = [c for c in cases if c.expect == "answer"]
@@ -160,13 +166,15 @@ def score_at(cases: list[Case], threshold: float) -> dict:
     invented = [
         c
         for c in escalate
-        if c.best_score >= threshold and c.model_refused is not True
+        if c.best_score >= effective(c, threshold) and c.model_refused is not True
     ]
     # ложная эскалация: ответ есть и найден, но порог его отсёк
     false_escalations = [
-        c for c in answer if c.found and c.best_score < threshold
+        c for c in answer if c.found and c.best_score < effective(c, threshold)
     ]
-    answered_right = [c for c in answer if c.found and c.best_score >= threshold]
+    answered_right = [
+        c for c in answer if c.found and c.best_score >= effective(c, threshold)
+    ]
 
     return {
         "threshold": threshold,
