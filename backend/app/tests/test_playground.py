@@ -245,6 +245,21 @@ async def test_below_threshold_skips_model(client, knowledge, soro):
     assert soro.requests == [], "модель звали зря"
 
 
+async def test_greeting_answers_without_search_or_model(client, knowledge, soro):
+    """«Салом» — вежливость, а не вопрос: ни поиска, ни модели, ни эскалации.
+
+    На площадке это должно работать так же, как в каналах, иначе демо
+    противоречит само себе: в Telegram бот здоровается, а на экране 03
+    зовёт оператора.
+    """
+    events = dict(await ask(client, "салом"))
+
+    assert events["retrieval"]["fragments"] == []
+    assert not events["final"]["escalated"]
+    assert "Soro" in events["final"]["text"]
+    assert soro.requests == [], "модель звали на приветствие"
+
+
 async def test_unavailable_model_sends_error_event(client, knowledge, soro):
     """Модель лежит — на площадке это видно как есть.
 

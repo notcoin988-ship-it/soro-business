@@ -43,6 +43,67 @@ OPERATOR_RE = re.compile(settings.OPERATOR_REQUEST_RE, re.I)
 
 OPERATOR_REPLY = "Ҳозир мутахассисро пайваст мекунам."
 
+# --- вежливые реплики без вопроса ------------------------------------------
+#
+# «Салом» уходил в поиск, ничего там не находил и заводил карточку в
+# инбоксе: каждое приветствие клиента отрывало оператора от работы. Это
+# не поиск и не эскалация, это разговорная вежливость, и отвечать на неё
+# надо сразу.
+#
+# Сравниваем сообщение ЦЕЛИКОМ, а не по вхождению: «Салом! Фоизи амонат
+# чанд аст?» — обычный вопрос, и перехватывать его нельзя.
+
+GREETINGS = frozenset({
+    "салом", "салом алейкум", "ассалом", "ассалому алейкум",
+    "ассалому алайкум", "салам", "салом бародар",
+    "привет", "приветствую", "здравствуйте", "здравствуй", "здрасте",
+    "добрый день", "добрый вечер", "доброе утро",
+    "hello", "hi", "hey", "start",
+})
+THANKS = frozenset({
+    "раҳмат", "рахмат", "ташаккур", "сипос", "раҳмат калон",
+    "спасибо", "спасибо большое", "благодарю", "мерси",
+})
+FAREWELL = frozenset({
+    "хайр", "то дидор", "хуш омадед",
+    "пока", "до свидания", "всего доброго", "спокойной ночи",
+})
+
+# Знаки препинания и эмодзи убираем: «Салом!!!» и «салом 😊» — то же самое.
+NOT_WORD_RE = re.compile(r"[^\w\s]|_", re.UNICODE)
+
+GREETING_REPLY = (
+    "Салом! Ман Soro, ёрдамчии бонк. Дар бораи амонатҳо, қарзҳо, кортҳо ва "
+    "тарифҳо пурсед — ҷавоб медиҳам.\n"
+    "Здравствуйте! Я Soro, помощник банка. Спросите про вклады, кредиты, "
+    "карты и тарифы — отвечу."
+)
+THANKS_REPLY = (
+    "Хоҳиш мекунам! Боз саволе ҳаст?\nПожалуйста! Ещё вопросы есть?"
+)
+FAREWELL_REPLY = "Хайр, рӯзи хуш!\nВсего доброго!"
+
+
+def smalltalk_reply(text: str, workspace: Workspace) -> str | None:
+    """Ответ на вежливость без вопроса. `None` — это не вежливость.
+
+    Приветствие можно переопределить в `workspace.settings['greeting']` —
+    так требует раздел 7.1 для `/start`, и здесь берём оттуда же, чтобы у
+    бота не было двух разных приветствий.
+    """
+    words = NOT_WORD_RE.sub(" ", (text or "").lower())
+    words = " ".join(words.split())
+    if not words:
+        return None
+
+    if words in GREETINGS:
+        return (workspace.settings or {}).get("greeting") or GREETING_REPLY
+    if words in THANKS:
+        return THANKS_REPLY
+    if words in FAREWELL:
+        return FAREWELL_REPLY
+    return None
+
 # Ответа в базе знаний нет — говорим об этом сами, не тратя вызов модели.
 # Двуязычно, потому что язык вопроса здесь ещё не определён: определять его
 # для одной фразы — лишний код, а на демо клиент пишет и так и так.
@@ -244,6 +305,28 @@ async def handle_incoming(
             latency_ms=latency_ms,
             escalated=True,
             reason=escalation.REASON_USER_REQUEST,
+        )
+
+    # Вежливость без вопроса: «салом», «раҳмат», «пока». Отвечаем сразу —
+    # ни поиск, ни модель, ни оператор тут не нужны. Проверяем ПОСЛЕ
+    # просьбы об операторе: «оператор» важнее приветствия.
+    smalltalk = smalltalk_reply(text, workspace)
+    if smalltalk is not None:
+        latency_ms = int((time.monotonic() - started) * 1000)
+        outgoing = await save_message(
+            session,
+            conversation=conversation,
+            channel=channel,
+            role="assistant",
+            text=smalltalk,
+            latency_ms=latency_ms,
+        )
+        await session.commit()
+        return Reply(
+            text=smalltalk,
+            conversation_id=conversation.id,
+            message_id=outgoing.id,
+            latency_ms=latency_ms,
         )
 
     # RAG и модель. В поиск и в модель уходит text_masked, а не оригинал:

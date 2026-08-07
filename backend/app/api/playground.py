@@ -45,7 +45,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core import llm, rag
-from app.core.dialog import get_workspace
+from app.core.dialog import get_workspace, smalltalk_reply
 from app.core.pii import mask
 from app.db import get_session
 
@@ -122,6 +122,41 @@ async def stream(
     async def events():
         started = time.monotonic()
         try:
+            # Вежливость без вопроса обрабатывается тем же правилом, что и
+            # в каналах: иначе «салом» на площадке отвечает эскалацией, а в
+            # Telegram — приветствием, и демо противоречит само себе.
+            smalltalk = smalltalk_reply(pending.question, workspace)
+            if smalltalk is not None:
+                yield sse(
+                    "retrieval",
+                    {
+                        "question": question,
+                        "has_answer": True,
+                        "best_score": 0.0,
+                        "min_score": settings.RAG_MIN_SCORE,
+                        "search_ms": 0,
+                        # искать было нечего: это приветствие, а не вопрос
+                        "fragments": [],
+                    },
+                )
+                yield sse("delta", {"text": smalltalk})
+                yield sse(
+                    "final",
+                    {
+                        "text": smalltalk,
+                        "chunks_used": [],
+                        "escalated": False,
+                        "reason": None,
+                        "telemetry": {
+                            "search_ms": 0,
+                            "generation_ms": 0,
+                            "total_ms": int((time.monotonic() - started) * 1000),
+                            "tokens": 0,
+                        },
+                    },
+                )
+                return
+
             found = await rag.search(session, question, workspace.id)
             search_ms = int((time.monotonic() - started) * 1000)
 
