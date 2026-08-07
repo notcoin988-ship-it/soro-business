@@ -113,6 +113,25 @@ async def escalate(
     conversation.status = "operator"
     await session.flush()
 
+    # След в аудите. Воркспейс достаём по диалогу: сюда его никто не
+    # передаёт, а лишний параметр во всех вызовах ради одной записи —
+    # плохой размен.
+    from app.core import audit  # локально: иначе кольцевой импорт
+    from app.models import Workspace
+
+    workspace = await session.get(Workspace, conversation.workspace_id)
+    if workspace is not None:
+        await audit.record(
+            session,
+            workspace,
+            audit.EVENT_ESCALATION,
+            {
+                "conversation_id": conversation.id,
+                "escalation_id": escalation.id,
+                "reason": escalation.reason,
+            },
+        )
+
     await notify(
         "new_escalation",
         {

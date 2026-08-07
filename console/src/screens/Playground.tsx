@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import { API_BASE } from "../lib/api";
+import { API_BASE, getWorkspace } from "../lib/api";
 
 // Экран 03 «Площадка · стеклянный ящик».
 //
@@ -22,34 +22,6 @@ const STAGES = {
 } as const;
 
 type Stage = keyof typeof STAGES;
-
-// Четыре заготовки, как в эталоне; последняя — заведомо без ответа.
-//
-// ВАЖНО про формулировки. В эталоне и в сценарии приёмки фигурирует вклад
-// «Ояндасоз» — его у банка НЕ СУЩЕСТВУЕТ, прототип его выдумал для
-// красивого макета (проверено: в базе знаний 0 фрагментов с этим словом).
-// Спрашивать про него значит показывать на демо эскалацию вместо ответа.
-// Поэтому берём настоящие продукты Эсхаты: «Фоиданок», тарифы, переводы.
-// Вопросы совпадают с golden.yaml, то есть уже проверены прогоном.
-const PRESETS = [
-  {
-    label: "Вопрос на таджикском",
-    text: "Фоизи депозити онлайни «Фоиданок» чанд аст?",
-  },
-  {
-    label: "Вопрос на русском",
-    text: "Сколько стоит открытие счёта физическому лицу?",
-  },
-  {
-    label: "Смешанный язык",
-    text: "Салом! Подскажите, комиссия за перевод в другой банк чанд аст?",
-  },
-  {
-    label: "Вопроса нет в базе",
-    text: "Почему у меня списали 90 сомони вчера вечером?",
-    danger: true,
-  },
-];
 
 interface Fragment {
   n: number;
@@ -132,6 +104,10 @@ interface Exchange {
 
 export default function Playground() {
   const [question, setQuestion] = useState("");
+  // Имя модели с сервера. В эталоне зашито «Soro-27B · FP8», а отвечает
+  // GPTQ-int4 — на демо перед ИТ-службой подпись обязана совпадать с тем,
+  // что реально работает. Префикс вендора отбрасываем, он только мешает.
+  const [model, setModel] = useState("");
   const [history, setHistory] = useState<Exchange[]>([]);
   const [asked, setAsked] = useState("");
   const [answer, setAnswer] = useState("");
@@ -157,6 +133,12 @@ export default function Playground() {
     const log = logRef.current;
     if (log) log.scrollTop = log.scrollHeight;
   }, [answer, asked, history]);
+
+  useEffect(() => {
+    getWorkspace()
+      .then((info) => setModel(info.model.split("/").pop() ?? info.model))
+      .catch(() => setModel(""));
+  }, []);
 
   // Уходим с экрана посреди генерации — соединение закрываем, иначе
   // бэкенд продолжит гнать поток в никуда.
@@ -257,7 +239,7 @@ export default function Playground() {
           <div className="chatbar">
             <span className="pill live">
               <span className="dot" />
-              Soro-27B · FP8
+              {model || "модель…"}
             </span>
             <span style={{ color: "var(--muted2)" }}>·</span>
             <span>База знаний: Банк Эсхата</span>
@@ -266,8 +248,8 @@ export default function Playground() {
           <div className="chatlog" ref={logRef}>
             {!asked && history.length === 0 && (
               <div className="empty">
-                Задайте вопрос или выберите готовый —<br />
-                ответ печатается вживую, а справа виден разбор поиска.
+                Задайте вопрос — на таджикском или русском.<br />
+                Ответ печатается вживую, а справа виден разбор поиска.
               </div>
             )}
 
@@ -340,25 +322,11 @@ export default function Playground() {
             )}
           </div>
 
-          <div className="asks">
-            {PRESETS.map((preset) => (
-              <button
-                key={preset.label}
-                className={preset.danger ? "danger" : ""}
-                disabled={busy}
-                onClick={() => ask(preset.text)}
-              >
-                {preset.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Своё поле ввода. В эталоне только кнопки-заготовки, но экран
-              называется площадкой и нужен банку, чтобы проверять СВОИ
-              вопросы; кнопки эталона при этом остались как были. */}
+          {/* Поле вопроса — единственный вход. Кнопки-заготовки эталона
+              убраны: площадка нужна банку, чтобы проверять СВОИ вопросы, а
+              не четыре зашитых. */}
           <form
             className="asks"
-            style={{ borderTop: 0, paddingTop: 0 }}
             onSubmit={(event) => {
               event.preventDefault();
               ask(question);

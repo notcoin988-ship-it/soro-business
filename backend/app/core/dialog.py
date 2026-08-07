@@ -31,7 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core import escalation, llm, rag
+from app.core import audit, escalation, llm, policy, rag
 from app.core.pii import mask
 from app.models import ChannelIdentity, Contact, Conversation, Message, Workspace
 
@@ -224,20 +224,28 @@ async def save_message(
     text: str,
     latency_ms: int | None = None,
     chunks_used: list[int] | None = None,
+    workspace: Workspace | None = None,
 ) -> Message:
     """Записать сообщение. Маскирование здесь, а не в канале.
 
     `text` — оригинал, `text_masked` — то, что уйдёт в модель. Перепутать
     эти две колонки — самая дорогая ошибка проекта: либо оператор увидит
     маску вместо номера, либо номер клиента уйдёт наружу.
+
+    `workspace` нужен только чтобы спросить контур безопасности. Без него
+    маскируем — умолчание всегда в пользу защиты.
     """
+    masking = workspace is None or policy.enabled(workspace, policy.MASK_PII)
     message = Message(
         workspace_id=conversation.workspace_id,
         conversation_id=conversation.id,
         channel=channel,
         role=role,
         text=text,
-        text_masked=mask(text),
+        # Колонки местами не меняем никогда: слева оригинал, справа то,
+        # что уйдёт в модель. Выключенный тумблер делает их одинаковыми,
+        # а не переставляет.
+        text_masked=mask(text) if masking else text,
         latency_ms=latency_ms,
         chunks_used=chunks_used or [],
     )
@@ -276,6 +284,7 @@ async def handle_incoming(
         channel=channel,
         role="user",
         text=text,
+        workspace=workspace,
     )
 
     # Диалог уже у оператора — бот молчит.
@@ -296,6 +305,7 @@ async def handle_incoming(
             role="assistant",
             text=OPERATOR_REPLY,
             latency_ms=latency_ms,
+            workspace=workspace,
         )
         await session.commit()
         return Reply(
@@ -320,6 +330,7 @@ async def handle_incoming(
             role="assistant",
             text=smalltalk,
             latency_ms=latency_ms,
+            workspace=workspace,
         )
         await session.commit()
         return Reply(
@@ -348,6 +359,7 @@ async def handle_incoming(
         text=answer_text,
         latency_ms=latency_ms,
         chunks_used=chunks_used,
+        workspace=workspace,
     )
     await session.commit()
 
@@ -407,4 +419,27 @@ async def _answer(
         log.warning("модель недоступна (%s): %s", type(exc).__name__, exc)
         return LLM_DOWN_REPLY, [], True, "llm_unavailable"
 
-    return result.text, result.chunks_used, result.escalate, result.reason
+    text, chunks_used = result.text, result.chunks_used
+    if not policy.enabled(workspace, policy.CITE_SOURCES):
+        # Ссылки выключены в контуре безопасности: убираем и номера из
+        # текста, и chunks_used — иначе канал нарисует бейджи, которых
+        # в ответе уже нет.
+        text = llm.strip_citations(text)
+        chunks_used = []
+
+    await audit.record(
+        session,
+        workspace,
+        audit.EVENT_LLM_CALL,
+        {
+            # вопрос уже маскированный: сюда он приходит из text_masked
+            "question": question,
+            "chunk_ids": result.chunks_used,
+            "latency_ms": result.latency_ms,
+            "first_token_ms": result.first_token_ms,
+            "model": settings.SORO_MODEL,
+            "escalated": result.escalate,
+        },
+    )
+
+    return text, chunks_used, result.escalate, result.reason

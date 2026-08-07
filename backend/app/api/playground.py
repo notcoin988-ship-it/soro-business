@@ -44,7 +44,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core import llm, rag
+from app.core import audit, llm, policy, rag
 from app.core.dialog import get_workspace, smalltalk_reply
 from app.core.pii import mask
 from app.db import get_session
@@ -117,7 +117,11 @@ async def stream(
     # В поиск и в модель уходит маска — тот же инвариант, что в dialog.py.
     # На площадке это ещё и наглядно: сотрудник банка видит, что номер
     # карты до модели не доходит.
-    question = mask(pending.question)
+    question = (
+        mask(pending.question)
+        if policy.enabled(workspace, policy.MASK_PII)
+        else pending.question
+    )
 
     async def events():
         started = time.monotonic()
@@ -213,13 +217,35 @@ async def stream(
 
             raw = "".join(pieces)
             text, escalated, reason = llm.parse_answer(raw, found.hits, question)
+            chunks_used = llm.cited_chunk_ids(text, found.hits)
+            if not policy.enabled(workspace, policy.CITE_SOURCES):
+                text = llm.strip_citations(text)
+                chunks_used = []
             generation_ms = int((time.monotonic() - generation_started) * 1000)
+
+            await audit.record(
+                session,
+                workspace,
+                audit.EVENT_LLM_CALL,
+                {
+                    "question": question,
+                    "chunk_ids": llm.cited_chunk_ids(text, found.hits),
+                    "latency_ms": generation_ms,
+                    "model": settings.SORO_MODEL,
+                    "escalated": escalated,
+                    "source": "playground",
+                },
+            )
+            # Коммит нужен явно: площадка больше ничего в базу не пишет, а
+            # `record` делает только flush — в `dialog.py` он часть большей
+            # транзакции, и коммитить там будет вызывающий.
+            await session.commit()
 
             yield sse(
                 "final",
                 {
                     "text": text,
-                    "chunks_used": llm.cited_chunk_ids(text, found.hits),
+                    "chunks_used": chunks_used,
                     "escalated": escalated,
                     "reason": reason,
                     "telemetry": {
