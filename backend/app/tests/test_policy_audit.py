@@ -20,6 +20,21 @@ WS = "test-ws"
 CARD = "5058123456789012"
 
 
+@pytest.fixture(autouse=True)
+async def restore_demo_settings(session, demo_workspace):
+    """Вернуть настройки демо-воркспейса после теста.
+
+    Эндпоинты сами делают commit, и запись переживает откат тестовой
+    транзакции: база общая с разработкой, и выключенный в тесте флаг
+    оставался выключенным на живом стенде. Ловилось так — после прогона
+    площадка переставала показывать ссылки на источники.
+    """
+    before = dict(demo_workspace.settings or {})
+    yield
+    demo_workspace.settings = before
+    await session.commit()
+
+
 @pytest.fixture
 async def client(session):
     app.dependency_overrides[get_session] = lambda: session

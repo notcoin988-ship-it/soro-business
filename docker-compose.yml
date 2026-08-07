@@ -25,6 +25,27 @@ services:
     volumes: [ "teidata:/data" ]
     # на сервере с GPU заменить образ на ...:1.5 (cuda) — станет в ~20x быстрее
 
+  # ДОБАВЛЕНО СВЕРХ ТЗ (согласовано с тимлидом): переранкер.
+  #
+  # ЗАЧЕМ. bge-m3 даёт РАЗНУЮ ШКАЛУ близости для разных языков: русская
+  # пара «вопрос-документ» набирает 0,69–0,71, таджикская при таком же
+  # качестве совпадения — 0,54–0,55. Единый порог 6.4 отсекает таджикский
+  # как класс, а демо построено именно на нём. Безразмерные признаки
+  # (отрыв топ-1 от остальных) проверены на golden set и оказались хуже
+  # абсолютной близости — см. ARCHITECTURE.md.
+  #
+  # Кросс-энкодер читает вопрос и фрагмент ВМЕСТЕ и выдаёт откалиброванную
+  # оценку; он для того и сделан, чтобы чинить эту слабость эмбеддингов.
+  # Отдельной библиотеки не требуется: тот же TEI умеет ранжирование.
+  #
+  # Память: держим маленький батч — переранжируем всего RAG_TOP_K коротких
+  # пар, а на этой машине WSL уже дважды умирал от прогрева TEI.
+  reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    command: --model-id BAAI/bge-reranker-v2-m3 --max-batch-tokens 4096
+    ports: [ "8081:80" ]
+    volumes: [ "rerankdata:/data" ]
+
   backend:
     build: ./backend
     env_file: .env
@@ -48,4 +69,4 @@ services:
     command: rq worker ingest --url redis://redis:6379/0
     volumes: [ "./backend:/code", "uploads:/data/uploads" ]
 
-volumes: { pgdata: {}, teidata: {}, uploads: {} }
+volumes: { pgdata: {}, teidata: {}, rerankdata: {}, uploads: {} }

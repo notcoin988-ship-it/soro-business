@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -85,3 +86,20 @@ async def workspace(session) -> Workspace:
     session.add(workspace)
     await session.flush()
     return workspace
+
+
+@pytest.fixture(autouse=True)
+def no_reranker(monkeypatch):
+    """Переранкер в тестах выключен по умолчанию.
+
+    Он необязательный сервис: живёт в своём контейнере, качает 2 ГБ весов и
+    считает пары на CPU по секунде. Тесты ядра не должны от него зависеть
+    ни временем, ни доступностью — иначе они меряют чужой аптайм, а не наш
+    код. Плюс его оценка живёт в другой шкале, и половина проверок про
+    косинус перестала бы иметь смысл.
+
+    Сам переранкер проверяется отдельно, на подставном сервере —
+    `test_rerank.py`. Тесту, которому он нужен, достаточно вернуть адрес
+    обратно через `monkeypatch`.
+    """
+    monkeypatch.setattr(settings, "RERANKER_URL", "", raising=False)

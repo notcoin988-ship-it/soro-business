@@ -270,6 +270,15 @@ async def stream(
         except asyncio.CancelledError:
             # вкладку закрыли посреди генерации — это норма, не ошибка
             raise
+        finally:
+            # Соединение к базе возвращаем руками. FastAPI закрывает
+            # зависимость с `yield` по завершении запроса, но у
+            # StreamingResponse тело живёт дольше, а при обрыве потока
+            # (закрыли вкладку, ушли с экрана) уборка может не случиться
+            # вовсе. Найдено прогоном: шестьдесят оборванных потоков подряд
+            # выбрали весь пул, и бэкенд начал отвечать 500
+            # «QueuePool limit of size 5 overflow 10 reached».
+            await session.close()
 
     return StreamingResponse(
         events(),

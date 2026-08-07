@@ -26,6 +26,7 @@ RRF годится только для сортировки: его значен
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 
@@ -34,6 +35,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+
+log = logging.getLogger(__name__)
 
 # Константа RRF из ТЗ. 60 — значение из исходной статьи (Cormack et al.):
 # оно сглаживает разницу между первым и вторым местом, чтобы одна ветка не
@@ -45,6 +48,11 @@ RRF_K = 60
 # индексацией (там `ingest/worker.py` ждёт до 600 секунд, и это правильно
 # для фоновой очереди, но недопустимо здесь).
 QUERY_TIMEOUT = httpx.Timeout(10.0, connect=3.0)
+
+# У переранкера свой бюджет: на CPU шесть пар считаются около 3,3 секунды,
+# и общий десятисекундный таймаут его резал на ровном месте. Ставим с
+# запасом — лучше медленный ответ, чем молчаливый откат к косинусу.
+RERANK_TIMEOUT = httpx.Timeout(30.0, connect=3.0)
 
 # Из вопроса берём только буквы и цифры. Всё остальное — кавычки, дефисы,
 # вопросительные знаки — для `to_tsquery` синтаксис, и «Ояндасоз?» уронил бы
@@ -111,6 +119,8 @@ class Hit:
     score: float
     # значение RRF: годится только для сортировки, наружу не показываем
     rrf: float
+    # оценка переранкера 0..1; None — переранжирования не было
+    rerank: float | None = None
 
 
 @dataclass(frozen=True)
@@ -118,8 +128,13 @@ class RagResult:
     hits: list[Hit]
     # False → в базе знаний ответа нет, `core/escalation.py` зовёт оператора
     has_answer: bool
-    # близость лучшего из возвращённых фрагментов; 0.0, если не нашлось ничего
+    # Оценка лучшего фрагмента ПО ТОЙ ШКАЛЕ, ПО КОТОРОЙ ПРИНЯТО РЕШЕНИЕ:
+    # переранкера, если он отработал, иначе косинусная. Смешивать шкалы
+    # нельзя — у них разные пороги, и цифра на экране 03 должна означать
+    # ровно то, по чему бот решил отвечать.
     best_score: float
+    # какой шкалой мерили: нужно телеметрии и подписи на «Площадке»
+    reranked: bool = False
 
 
 def build_tsquery(question: str) -> str:
@@ -215,6 +230,73 @@ async def embed_query(question: str) -> list[float]:
     return vector
 
 
+async def rerank(question: str, hits: list[Hit]) -> list[Hit] | None:
+    """Переранжировать кандидатов кросс-энкодером.
+
+    ЗАЧЕМ. bge-m3 сравнивает два независимых вектора, и абсолютная величина
+    косинуса у неё зависит от языка: русская пара «вопрос-документ» даёт
+    0,69–0,71, таджикская при таком же качестве — 0,54–0,55. Единый порог
+    отсекает таджикский как класс. Кросс-энкодер читает вопрос и фрагмент
+    ВМЕСТЕ, поэтому его оценка сопоставима.
+
+    Возвращает `None`, если переранкер выключен или недоступен: поиск
+    обязан работать и без него, просто хуже. Падать из-за необязательного
+    сервиса нельзя — клиент ждёт ответа.
+
+    Модель `bge-reranker-v2-m3` держит 8192 токена на пару, так что резать
+    текст фрагмента не нужно: у нас он около 400.
+    """
+    if not settings.RERANKER_URL or not hits:
+        return None
+
+    # Режем и по числу кандидатов, и по длине текста: кросс-энкодер на CPU
+    # считает каждую пару целиком, и 12 длинных фрагментов не укладываются
+    # в норматив (замеры — в комментарии к RERANK_CANDIDATES).
+    hits = hits[: settings.RERANK_CANDIDATES]
+    limit = settings.RERANK_TEXT_LIMIT
+
+    url = settings.RERANKER_URL.rstrip("/") + "/rerank"
+    payload = {
+        "query": question,
+        "texts": [hit.text[:limit] for hit in hits],
+        # TEI по умолчанию сжимает логиты сигмоидой в 0..1 — нам нужна
+        # именно нормированная оценка, пороги подбираются по ней
+        "raw_scores": False,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=RERANK_TIMEOUT) as client:
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+            ranked = response.json()
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
+        log.warning("переранкер недоступен (%s): %s", type(exc).__name__, exc)
+        return None
+
+    out: list[Hit] = []
+    for item in ranked:
+        index = item.get("index")
+        if index is None or not 0 <= index < len(hits):
+            continue
+        source = hits[index]
+        out.append(
+            Hit(
+                chunk_id=source.chunk_id,
+                document_id=source.document_id,
+                title=source.title,
+                page=source.page,
+                source_url=source.source_url,
+                text=source.text,
+                score=source.score,
+                rrf=source.rrf,
+                rerank=float(item["score"]),
+            )
+        )
+    # TEI отдаёт уже отсортированным по убыванию, но полагаться на это
+    # незачем: порядок здесь — это порядок ссылок [1], [2] в ответе
+    out.sort(key=lambda hit: hit.rerank or 0.0, reverse=True)
+    return out or None
+
+
 async def search(
     session: AsyncSession,
     question: str,
@@ -232,7 +314,9 @@ async def search(
     """
     top_k = top_k if top_k is not None else settings.RAG_TOP_K
     return_k = return_k if return_k is not None else settings.RAG_RETURN_K
-    min_score = min_score if min_score is not None else settings.RAG_MIN_SCORE
+    # `min_score` НЕ подставляем здесь: умолчание зависит от того, отработал
+    # ли переранкер, а это выяснится только после запроса. Переданное
+    # значение уважаем как есть — им пользуется eval_rag.py.
 
     if not question.strip():
         return RagResult(hits=[], has_answer=False, best_score=0.0)
@@ -253,7 +337,11 @@ async def search(
                 "tsq": tsquery or "пусто",
                 "has_text": bool(tsquery),
                 "top_k": top_k,
-                "return_k": return_k,
+                # Переранкеру нужен выбор: он и существует затем, чтобы
+                # поднять наверх фрагмент, который гибридный поиск поставил
+                # третьим. Отдать ему сразу RAG_RETURN_K значит лишить его
+                # работы. Без переранкера берём как раньше.
+                "return_k": top_k if settings.RERANKER_URL else return_k,
                 "rrf_k": RRF_K,
             },
         )
@@ -273,12 +361,30 @@ async def search(
         for row in rows
     ]
 
+    ranked = await rerank(question, hits)
+    reranked = ranked is not None
+    if reranked:
+        hits = ranked
+    hits = hits[:return_k]
+
     # Порог — по лучшему из ВОЗВРАЩЁННЫХ фрагментов, а не по лучшему из
     # всех кандидатов: сказать «ответ есть», а в промпт положить другие
     # фрагменты — это и есть выдуманный ответ, которого ТЗ требует избежать.
-    best_score = max((h.score for h in hits), default=0.0)
+    #
+    # Шкалы не смешиваем: у переранкера свой порог. Если он не отработал —
+    # решаем по косинусу и старому порогу, то есть ровно как раньше.
+    if reranked:
+        threshold = (
+            min_score if min_score is not None else settings.RERANK_MIN_SCORE
+        )
+        best_score = max((h.rerank or 0.0 for h in hits), default=0.0)
+    else:
+        threshold = min_score if min_score is not None else settings.RAG_MIN_SCORE
+        best_score = max((h.score for h in hits), default=0.0)
+
     return RagResult(
         hits=hits,
-        has_answer=best_score >= min_score,
+        has_answer=best_score >= threshold,
         best_score=best_score,
+        reranked=reranked,
     )
