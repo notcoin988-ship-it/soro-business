@@ -301,7 +301,17 @@ async def _answer(
     found = await rag.search(session, question, workspace.id)
 
     if not found.has_answer:
-        return NO_ANSWER_REPLY, [], True, llm.REASON_NO_ANSWER
+        # Причину уточняем и здесь, а не только по ответу модели: вопросы
+        # вроде «почему у меня списали 90 сомони» порог отсекает раньше,
+        # чем модель их увидит, и оператор получал бы «нет ответа» вместо
+        # «клиент спрашивает про свои деньги». Разница в том, лезть ли
+        # ему сразу в АБС.
+        reason = (
+            llm.REASON_PII_TOPIC
+            if llm.pii_topic(question)
+            else llm.REASON_NO_ANSWER
+        )
+        return NO_ANSWER_REPLY, [], True, reason
 
     try:
         result = await llm.answer(
