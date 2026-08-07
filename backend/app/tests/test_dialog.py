@@ -145,6 +145,63 @@ async def test_bot_answer_never_contains_raw_pii(session, workspace):
     assert CARD not in reply.text
 
 
+# ---------------------------------------------------------------------------
+# вежливость без вопроса
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text", ["салом", "Салом!", "  САЛОМ  ", "привет", "Здравствуйте!", "hi"]
+)
+async def test_greeting_is_answered_not_escalated(session, workspace, text):
+    """«Салом» не должен будить оператора.
+
+    До этой правки приветствие уходило в поиск, ничего не находило и
+    заводило карточку в инбоксе — каждое «привет» отрывало человека от
+    работы.
+    """
+    reply = await send(session, text)
+
+    assert reply is not None
+    assert not reply.escalated
+    assert reply.reason is None
+    assert "Soro" in reply.text
+
+
+@pytest.mark.parametrize("text", ["раҳмат", "Спасибо!", "ташаккур"])
+async def test_thanks_is_answered(session, workspace, text):
+    reply = await send(session, text)
+    assert not reply.escalated
+
+
+async def test_farewell_is_answered(session, workspace):
+    reply = await send(session, "хайр")
+    assert not reply.escalated
+
+
+async def test_question_with_greeting_is_not_smalltalk(session, workspace):
+    """Сторож: «Салом! Фоизи амонат чанд аст?» — это ВОПРОС.
+
+    Сравнение идёт по всему сообщению целиком именно поэтому: проверка по
+    вхождению перехватывала бы каждый вежливый вопрос и бот отвечал бы на
+    них приветствием.
+    """
+    reply = await send(session, "Салом! Фоизи амонат чанд аст?")
+
+    assert "Soro" not in reply.text
+    # база знаний тестового воркспейса пуста, поэтому честная эскалация
+    assert reply.escalated
+
+
+async def test_greeting_can_be_overridden_by_workspace(session, workspace):
+    """Приветствие берётся из настроек воркспейса (раздел 7.1)."""
+    workspace.settings = {"greeting": "Хуш омадед ба бонки мо!"}
+    await session.flush()
+
+    reply = await send(session, "салом")
+    assert reply.text == "Хуш омадед ба бонки мо!"
+
+
 async def test_empty_knowledge_base_escalates(session, workspace):
     """База знаний пуста — отвечать нечем, и бот честно зовёт оператора.
 
