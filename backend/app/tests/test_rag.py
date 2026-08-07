@@ -292,6 +292,31 @@ async def test_min_score_can_be_overridden(session, knowledge):
     assert (await search(session, question, knowledge.id, min_score=0.0)).has_answer
 
 
+async def test_greeting_does_not_spoil_search(session, knowledge):
+    """«Салом» перед вопросом не должно менять результат поиска.
+
+    Живой замер до правки (боевая база, с переранкером):
+
+        «чигуна корти милли дархост кунам»          0,462  отвечает
+        «салом чигуна корти милли дархост кунам»    0,048  эскалация
+
+    Одно приветствие роняло оценку в десять раз, потому что кросс-энкодер
+    оценивает пару «вопрос — фрагмент» целиком, а на «салом» ни один
+    фрагмент банка не отвечает. Лечится не порогом, а срезанием
+    приветствия ПЕРЕД поиском: `core/phrases.strip_greeting`.
+
+    В МОДЕЛЬ вопрос уходит целиком — здороваться в ответ она должна.
+    """
+    plain = await search(session, "Фоизи амонати «Ояндасоз» чанд аст?", knowledge.id)
+    polite = await search(
+        session, "Салом! Фоизи амонати «Ояндасоз» чанд аст?", knowledge.id
+    )
+
+    assert [h.chunk_id for h in polite.hits] == [h.chunk_id for h in plain.hits]
+    assert polite.best_score == pytest.approx(plain.best_score, abs=1e-6)
+    assert polite.has_answer == plain.has_answer
+
+
 async def test_embed_query_matches_schema_dimension():
     """Размерность вектора вопроса обязана совпасть со схемой, иначе
     `<=>` упадёт уже в SQL, и разбираться придётся по трейсу из базы."""

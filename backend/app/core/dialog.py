@@ -31,7 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core import audit, escalation, llm, policy, rag
+from app.core import audit, escalation, llm, phrases, policy, rag
 from app.core.pii import mask
 from app.models import ChannelIdentity, Contact, Conversation, Message, Workspace
 
@@ -46,31 +46,9 @@ OPERATOR_REPLY = "Ҳозир мутахассисро пайваст мекун�
 # --- вежливые реплики без вопроса ------------------------------------------
 #
 # «Салом» уходил в поиск, ничего там не находил и заводил карточку в
-# инбоксе: каждое приветствие клиента отрывало оператора от работы. Это
-# не поиск и не эскалация, это разговорная вежливость, и отвечать на неё
-# надо сразу.
-#
-# Сравниваем сообщение ЦЕЛИКОМ, а не по вхождению: «Салом! Фоизи амонат
-# чанд аст?» — обычный вопрос, и перехватывать его нельзя.
-
-GREETINGS = frozenset({
-    "салом", "салом алейкум", "ассалом", "ассалому алейкум",
-    "ассалому алайкум", "салам", "салом бародар",
-    "привет", "приветствую", "здравствуйте", "здравствуй", "здрасте",
-    "добрый день", "добрый вечер", "доброе утро",
-    "hello", "hi", "hey", "start",
-})
-THANKS = frozenset({
-    "раҳмат", "рахмат", "ташаккур", "сипос", "раҳмат калон",
-    "спасибо", "спасибо большое", "благодарю", "мерси",
-})
-FAREWELL = frozenset({
-    "хайр", "то дидор", "хуш омадед",
-    "пока", "до свидания", "всего доброго", "спокойной ночи",
-})
-
-# Знаки препинания и эмодзи убираем: «Салом!!!» и «салом 😊» — то же самое.
-NOT_WORD_RE = re.compile(r"[^\w\s]|_", re.UNICODE)
+# инбоксе: каждое приветствие клиента отрывало оператора от работы.
+# Словарь и разбор живут в `core/phrases`: они нужны ещё и поиску, который
+# вырезает приветствие из вопроса перед переранжированием.
 
 GREETING_REPLY = (
     "Салом! Ман Soro, ёрдамчии бонк. Дар бораи амонатҳо, қарзҳо, кортҳо ва "
@@ -83,26 +61,27 @@ THANKS_REPLY = (
 )
 FAREWELL_REPLY = "Хайр, рӯзи хуш!\nВсего доброго!"
 
+REPLIES = {
+    "greeting": GREETING_REPLY,
+    "thanks": THANKS_REPLY,
+    "farewell": FAREWELL_REPLY,
+}
+
 
 def smalltalk_reply(text: str, workspace: Workspace) -> str | None:
     """Ответ на вежливость без вопроса. `None` — это не вежливость.
 
     Приветствие можно переопределить в `workspace.settings['greeting']` —
-    так требует раздел 7.1 для `/start`, и здесь берём оттуда же, чтобы у
-    бота не было двух разных приветствий.
+    так требует раздел 7.1 для `/start`, и берём оттуда же, чтобы у бота
+    не было двух разных приветствий.
     """
-    words = NOT_WORD_RE.sub(" ", (text or "").lower())
-    words = " ".join(words.split())
-    if not words:
+    kind = phrases.is_smalltalk(text)
+    if kind is None:
         return None
-
-    if words in GREETINGS:
+    if kind == "greeting":
         return (workspace.settings or {}).get("greeting") or GREETING_REPLY
-    if words in THANKS:
-        return THANKS_REPLY
-    if words in FAREWELL:
-        return FAREWELL_REPLY
-    return None
+    return REPLIES[kind]
+
 
 # Ответа в базе знаний нет — говорим об этом сами, не тратя вызов модели.
 # Двуязычно, потому что язык вопроса здесь ещё не определён: определять его

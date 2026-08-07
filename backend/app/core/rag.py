@@ -35,6 +35,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core import phrases
 
 log = logging.getLogger(__name__)
 
@@ -321,8 +322,18 @@ async def search(
     if not question.strip():
         return RagResult(hits=[], has_answer=False, best_score=0.0)
 
-    vector = await embed_query(question)
-    tsquery = build_tsquery(question)
+    # ИЩЕМ БЕЗ ПРИВЕТСТВИЯ. Кросс-энкодер оценивает пару «вопрос —
+    # фрагмент» целиком, и слова, на которые фрагмент не отвечает, тянут
+    # оценку вниз. Замер: «чигуна корти милли дархост кунам» даёт 0,462,
+    # оно же с «салом» впереди — 0,048, вдесятеро меньше и мимо порога.
+    # Здороваться перед вопросом — обычное дело для живого клиента, и бот
+    # не должен из-за этого молчать.
+    #
+    # В МОДЕЛЬ уходит полный вопрос: отвечать на приветствие она должна.
+    query = phrases.strip_greeting(question)
+
+    vector = await embed_query(query)
+    tsquery = build_tsquery(query)
 
     rows = (
         await session.execute(
@@ -361,7 +372,7 @@ async def search(
         for row in rows
     ]
 
-    ranked = await rerank(question, hits)
+    ranked = await rerank(query, hits)
     reranked = ranked is not None
     if reranked:
         hits = ranked
