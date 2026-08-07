@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { API_BASE } from "../lib/api";
 
 // Экран 03 «Площадка · стеклянный ящик».
@@ -111,8 +111,28 @@ function withCitations(
   return parts;
 }
 
+// Завершённая пара «вопрос — ответ». Лог их копит: в эталоне каждый клик
+// по заготовке очищал лог (`log.innerHTML=''`), но там прокручивалась
+// заготовленная анимация на один сценарий. У нас это чат, и стирать
+// предыдущий ответ при новом вопросе — значит терять то, что человек
+// только что читал.
+//
+// ВАЖНО, ЧЕГО ЭТО НЕ ДЕЛАЕТ: история копится только на экране. В модель
+// по-прежнему уходит один вопрос без предыдущих (USER_TEMPLATE раздела
+// 6.6 контекста не предусматривает), поэтому «а какой у него минимальный
+// взнос?» вторым сообщением бот не поймёт. Многоходовый диалог — отдельная
+// задача, она нужна и каналам тоже.
+interface Exchange {
+  question: string;
+  answer: string;
+  escalated: boolean;
+  belowThreshold: boolean;
+  error: string;
+}
+
 export default function Playground() {
   const [question, setQuestion] = useState("");
+  const [history, setHistory] = useState<Exchange[]>([]);
   const [asked, setAsked] = useState("");
   const [answer, setAnswer] = useState("");
   const [fragments, setFragments] = useState<Fragment[]>([]);
@@ -136,7 +156,7 @@ export default function Playground() {
   useEffect(() => {
     const log = logRef.current;
     if (log) log.scrollTop = log.scrollHeight;
-  }, [answer, asked]);
+  }, [answer, asked, history]);
 
   // Уходим с экрана посреди генерации — соединение закрываем, иначе
   // бэкенд продолжит гнать поток в никуда.
@@ -146,6 +166,13 @@ export default function Playground() {
     if (!text.trim() || busy) return;
 
     sourceRef.current?.close();
+    // предыдущая пара уезжает в историю, а не стирается
+    if (asked) {
+      setHistory((current) => [
+        ...current,
+        { question: asked, answer, escalated, belowThreshold, error },
+      ]);
+    }
     setAsked(text);
     setQuestion("");
     setAnswer("");
@@ -237,12 +264,42 @@ export default function Playground() {
           </div>
 
           <div className="chatlog" ref={logRef}>
-            {!asked && (
+            {!asked && history.length === 0 && (
               <div className="empty">
                 Задайте вопрос или выберите готовый —<br />
                 ответ печатается вживую, а справа виден разбор поиска.
               </div>
             )}
+
+            {/* Прошлые пары. Ссылки в них не подсвечивают панель справа:
+                фрагменты там уже от нового вопроса, и подсветка вела бы
+                не туда. */}
+            {history.map((item, index) => (
+              <Fragment key={index}>
+                <div className="msg u">{item.question}</div>
+                <div className="msg a">
+                  <div className="avatar">
+                    <SoroMark />
+                  </div>
+                  <div
+                    className={`abody${
+                      item.escalated || item.belowThreshold ? " warn" : ""
+                    }`}
+                  >
+                    {item.error ? (
+                      <span className="fail">{item.error}</span>
+                    ) : item.belowThreshold ? (
+                      "Ин маълумот дар ҳуҷҷатҳои бонк нест — мутахассисро пайваст мекунам."
+                    ) : (
+                      withCitations(item.answer, () => {})
+                    )}
+                    {item.escalated && (
+                      <div className="esc">⤴ Передан оператору</div>
+                    )}
+                  </div>
+                </div>
+              </Fragment>
+            ))}
 
             {asked && <div className="msg u">{asked}</div>}
 
