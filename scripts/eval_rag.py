@@ -58,6 +58,10 @@ class Case:
     best_score: float = 0.0
     found: bool = False         # must_contain нашёлся в топ-3
     top_titles: tuple[str, ...] = ()
+    # Заполняется только в режиме --with-model: отказалась ли модель
+    # отвечать, увидев фрагменты (маркер [ESCALATE] правила 1 промпта).
+    # None — модель не спрашивали.
+    model_refused: bool | None = None
 
 
 def normalize(value: str) -> str:
@@ -91,8 +95,24 @@ def load_cases(path: Path) -> list[Case]:
     return cases
 
 
-async def run_cases(session: AsyncSession, workspace_id: int, cases: list[Case]):
-    """Один поиск на вопрос. Порог не применяем — сравним потом."""
+async def run_cases(
+    session: AsyncSession,
+    workspace_id: int,
+    cases: list[Case],
+    *,
+    with_model: bool = False,
+    threshold: float = 0.0,
+    bank_name: str = "",
+):
+    """Один поиск на вопрос. Порог не применяем — сравним потом.
+
+    С `--with-model` вопросы, прошедшие порог, дополнительно уходят в
+    модель: только так видно работу второго фильтра. Режим дорогой (по
+    вызову модели на вопрос), поэтому по умолчанию выключен и порог в нём
+    фиксированный — перебирать диапазон, дёргая модель, слишком долго.
+    """
+    from app.core import llm  # локально: без --with-model он не нужен
+
     for number, case in enumerate(cases, start=1):
         # min_score=0 — решение принимаем сами, для всех порогов сразу
         result = await search(session, case.question, workspace_id, min_score=0.0)
@@ -102,6 +122,15 @@ async def run_cases(session: AsyncSession, workspace_id: int, cases: list[Case])
         if case.must_contain:
             needle = normalize(case.must_contain)
             case.found = any(needle in normalize(hit.text) for hit in result.hits)
+
+        if with_model and result.hits and case.best_score >= threshold:
+            try:
+                answer = await llm.answer(
+                    case.question, result.hits, bank_name=bank_name
+                )
+                case.model_refused = answer.escalate
+            except Exception as exc:  # noqa: BLE001
+                print(f"\n  ! модель недоступна на «{case.question[:40]}»: {exc}")
 
         print(f"  {number:>2}/{len(cases)}", end="\r", flush=True)
     print(" " * 20, end="\r")
@@ -121,8 +150,18 @@ def score_at(cases: list[Case], threshold: float) -> dict:
     answer = [c for c in cases if c.expect == "answer"]
     escalate = [c for c in cases if c.expect == "escalate"]
 
-    # выдумка: ответа в базе нет, а бот отвечает. Этих должно быть 0
-    invented = [c for c in escalate if c.best_score >= threshold]
+    # Выдумка: ответа в базе нет, а бот отвечает. Этих должно быть 0.
+    #
+    # Порог — лишь первый фильтр. Второй — сама модель: правило 1 промпта
+    # велит ей поставить [ESCALATE], если ответа во фрагментах нет. Без
+    # режима --with-model мы этого не видим и считаем выдумкой всё, что
+    # прошло порог, — метрика получается пессимистичной и на калиброванном
+    # пороге показывает провал там, где система ведёт себя правильно.
+    invented = [
+        c
+        for c in escalate
+        if c.best_score >= threshold and c.model_refused is not True
+    ]
     # ложная эскалация: ответ есть и найден, но порог его отсёк
     false_escalations = [
         c for c in answer if c.found and c.best_score < threshold
@@ -240,6 +279,10 @@ async def main() -> int:
         help="порог для блока 2; по умолчанию из настроек",
     )
     parser.add_argument("--sweep", action="store_true", help="перебрать пороги")
+    parser.add_argument(
+        "--with-model", action="store_true",
+        help="спрашивать модель на прошедших порог — видно второй фильтр",
+    )
     parser.add_argument("--misses", type=int, default=15)
     parser.add_argument("--limit", type=int, help="взять первые N вопросов")
     args = parser.parse_args()
@@ -275,7 +318,14 @@ async def main() -> int:
                 f"escalate {sum(1 for c in cases if c.expect == 'escalate')})\n"
             )
             started = time.monotonic()
-            await run_cases(session, workspace.id, cases)
+            await run_cases(
+                session,
+                workspace.id,
+                cases,
+                with_model=args.with_model,
+                threshold=args.threshold,
+                bank_name=workspace.name,
+            )
             elapsed = time.monotonic() - started
             print(
                 f"прогон: {elapsed:.1f} сек, "

@@ -78,10 +78,10 @@ async def knowledge(session, demo_workspace):
 
 @pytest.fixture(autouse=True)
 def reachable_threshold(monkeypatch):
-    """Порог опущен: иначе таджикский вопрос не доходит до модели.
+    """Порог опущен: проверяется контракт потока, а не значение порога.
 
-    Причина та же, что в test_dialog_rag.py — см. ARCHITECTURE.md про
-    0,63 против 0,65. Здесь проверяется контракт потока, а не порог.
+    Причина та же, что в test_dialog_rag.py: тест не должен падать
+    оттого, что кто-то откалибровал `RAG_MIN_SCORE`.
     """
     monkeypatch.setattr(playground.settings, "RAG_MIN_SCORE", 0.3, raising=False)
 

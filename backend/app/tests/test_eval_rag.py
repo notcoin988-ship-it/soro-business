@@ -147,16 +147,23 @@ def test_threshold_boundary_is_inclusive(ev):
 # ---------------------------------------------------------------------------
 
 
-def test_golden_set_matches_tz_proportion(ev):
-    """40 вопросов с ответом и 20 без — пропорция раздела 3.1."""
+def test_golden_set_size_and_proportion(ev):
+    """60 вопросов; по ТЗ 40 + 20, фактически 41 + 19.
+
+    Расхождение осознанное: вопрос про вклад в евро стоял в группе «ответа
+    нет», а ответ в документах есть — бот его честно процитировал, и это
+    мы считали выдумкой. Ошибка была в наборе. Восстанавливать пропорцию
+    выдуманным вопросом бессмысленно: набор ценен соответствием
+    документам, а не арифметикой.
+    """
     golden = Path("/code/tests/golden.yaml")
     if not golden.exists():
         pytest.skip("tests/ не смонтирован")
 
     cases = ev.load_cases(golden)
     assert len(cases) == 60
-    assert sum(1 for c in cases if c.expect == "answer") == 40
-    assert sum(1 for c in cases if c.expect == "escalate") == 20
+    assert sum(1 for c in cases if c.expect == "answer") == 41
+    assert sum(1 for c in cases if c.expect == "escalate") == 19
 
 
 def test_every_answer_case_has_must_contain(ev):
