@@ -20,6 +20,13 @@
 для того и сделана, чтобы проверять на ней, а не чтобы засорять
 статистику демо. Логика ответа при этом та же: порог 6.4, затем модель.
 
+ПАМЯТЬ ДИАЛОГА. Фронт присылает `thread_id` — один на вкладку, — и по
+нему здесь копится история реплик. В каналах эту роль играет
+`conversations`, но площадка намеренно не пишет в базу, поэтому история
+лежит в памяти процесса рядом с `_pending`. Без неё бот не понимал ответ
+на собственный уточняющий вопрос; подробности и замеры — в шапке
+`core/context.py`.
+
 ПОЧЕМУ POST И SSE РАЗДЕЛЕНЫ. Так требует приложение А, и так же устроен
 виджет. Браузерный EventSource умеет только GET и не умеет тело запроса —
 значит вопрос надо сначала передать отдельным POST, а потом открыть на
@@ -44,8 +51,13 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core import audit, llm, policy, rag
-from app.core.dialog import get_workspace, smalltalk_reply
+from app.core import audit, context, llm, policy
+from app.core.dialog import (
+    NO_ANSWER_REPLY,
+    get_workspace,
+    search_in_context,
+    smalltalk_reply,
+)
 from app.core.pii import mask
 from app.db import get_session
 
@@ -62,27 +74,95 @@ PENDING_TTL_SEC = 60
 CHARS_PER_TOKEN = 3.5
 
 
+# Сколько живёт история площадки без новых вопросов. Полчаса — это
+# «сотрудник отошёл на совещание и вернулся к тому же разговору»; сутки
+# держать незачем, а минуты мало.
+THREAD_TTL_SEC = 30 * 60
+
+# Потолок на число одновременно живущих веток. Площадка — внутренний
+# экран на одного-двух человек, но вкладку открывают и забывают, и без
+# потолка словарь растёт до перезапуска.
+MAX_THREADS = 50
+
+
 @dataclass
 class Pending:
     question: str
+    thread_id: str | None = None
     created_at: float = field(default_factory=time.monotonic)
+
+
+@dataclass
+class Thread:
+    """История одной ветки «Площадки» — то же, что диалог в каналах.
+
+    В каналах история лежит в `messages` и переживает перезапуск. Здесь
+    её негде хранить: площадка намеренно не пишет в базу, иначе каждый
+    тестовый вопрос сотрудника банка попадал бы в инбокс и в аналитику
+    (см. шапку модуля). Поэтому история живёт в памяти процесса рядом с
+    `_pending` и по тем же правилам: перезапуск её теряет, и это
+    нормально — фронт начинает новую ветку.
+    """
+
+    turns: list[context.Turn] = field(default_factory=list)
+    touched_at: float = field(default_factory=time.monotonic)
 
 
 # вопрос между POST и SSE; см. комментарий в шапке модуля
 _pending: dict[str, Pending] = {}
+# история по веткам: ключ приходит с фронта, один на вкладку
+_threads: dict[str, Thread] = {}
 
 
 class MessageIn(BaseModel):
     text: str
+    # Ветка диалога. Пустое значение = разговор без памяти: так ведут
+    # себя старые клиенты и curl, и ломаться они не должны.
+    thread_id: str | None = None
 
 
 def _sweep() -> None:
-    """Выбросить протухшие вопросы. Дешевле фонового таймера."""
+    """Выбросить протухшие вопросы и ветки. Дешевле фонового таймера."""
     now = time.monotonic()
     for key in [
         k for k, v in _pending.items() if now - v.created_at > PENDING_TTL_SEC
     ]:
         _pending.pop(key, None)
+
+    for key in [
+        k for k, v in _threads.items() if now - v.touched_at > THREAD_TTL_SEC
+    ]:
+        _threads.pop(key, None)
+
+
+def _history(thread_id: str | None) -> list[context.Turn]:
+    thread = _threads.get(thread_id or "")
+    return list(thread.turns) if thread else []
+
+
+def _remember(thread_id: str | None, question: str, answer: str) -> None:
+    """Дописать обмен в историю ветки.
+
+    Записываем ВОПРОС КАК ЕГО НАПИСАЛ ЧЕЛОВЕК, а не переписанный поиском:
+    история — это разговор, а переписанная формулировка нужна только
+    поиску и живёт ровно один запрос.
+    """
+    if not thread_id:
+        return
+
+    # Потолок держим здесь, а не в `_sweep`: тот работает до того, как
+    # ветка заведена, и на один разговор мы всё равно вылезали за предел.
+    while thread_id not in _threads and len(_threads) >= MAX_THREADS:
+        oldest = min(_threads, key=lambda key: _threads[key].touched_at)
+        _threads.pop(oldest, None)
+
+    thread = _threads.setdefault(thread_id, Thread())
+    thread.turns.append(context.Turn("user", question))
+    thread.turns.append(context.Turn("assistant", answer))
+    # Храним чуть больше, чем уйдёт в промпт: `context.trim` сам возьмёт
+    # сколько нужно, а запас позволит когда-нибудь показать ветку целиком.
+    thread.turns = thread.turns[-2 * context.HISTORY_TURNS :]
+    thread.touched_at = time.monotonic()
 
 
 @router.post("/messages", status_code=202)
@@ -94,7 +174,7 @@ async def post_message(payload: MessageIn) -> dict:
 
     _sweep()
     message_id = uuid.uuid4().hex
-    _pending[message_id] = Pending(question=text)
+    _pending[message_id] = Pending(question=text, thread_id=payload.thread_id)
     return {"message_id": message_id}
 
 
@@ -144,6 +224,7 @@ async def stream(
                     },
                 )
                 yield sse("delta", {"text": smalltalk})
+                _remember(pending.thread_id, pending.question, smalltalk)
                 yield sse(
                     "final",
                     {
@@ -161,13 +242,22 @@ async def stream(
                 )
                 return
 
-            found = await rag.search(session, question, workspace.id)
+            history = _history(pending.thread_id)
+            outcome = await search_in_context(
+                session, workspace.id, question, history
+            )
+            found = outcome.result
             search_ms = int((time.monotonic() - started) * 1000)
 
             yield sse(
                 "retrieval",
                 {
                     "question": question,
+                    # Чем на самом деле искали. «Стеклянный ящик» обязан
+                    # это показывать: иначе фрагменты не сходятся с
+                    # вопросом на экране и выглядят как ошибка поиска.
+                    "searched": outcome.query,
+                    "rewritten": outcome.rewritten,
                     "has_answer": found.has_answer,
                     "best_score": round(found.best_score, 3),
                     "min_score": settings.RAG_MIN_SCORE,
@@ -190,6 +280,12 @@ async def stream(
             if not found.has_answer:
                 # Ни один фрагмент не прошёл порог — модель не зовём.
                 # Экран показывает это отдельным пустым состоянием.
+                #
+                # В историю кладём фразу об эскалации, а не пустоту: для
+                # следующего вопроса важно, что бот НЕ ответил. Иначе
+                # модель, увидев пустую реплику, решит, что ответила, и
+                # начнёт ссылаться на несказанное.
+                _remember(pending.thread_id, pending.question, NO_ANSWER_REPLY)
                 yield sse(
                     "final",
                     {
@@ -210,7 +306,7 @@ async def stream(
             generation_started = time.monotonic()
             pieces: list[str] = []
             async for piece in llm.stream_answer(
-                question, found.hits, bank_name=workspace.name
+                question, found.hits, bank_name=workspace.name, history=history
             ):
                 pieces.append(piece)
                 yield sse("delta", {"text": piece})
@@ -240,6 +336,8 @@ async def stream(
             # `record` делает только flush — в `dialog.py` он часть большей
             # транзакции, и коммитить там будет вызывающий.
             await session.commit()
+
+            _remember(pending.thread_id, pending.question, text)
 
             yield sse(
                 "final",

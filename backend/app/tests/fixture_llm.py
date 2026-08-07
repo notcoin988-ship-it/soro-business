@@ -31,10 +31,16 @@ class FakeSoro:
         *,
         status: int = 200,
         chunk_size: int = 3,
+        condensed: str | None = None,
     ):
         self.reply = reply
         self.status = status
         self.chunk_size = chunk_size
+        # Ответ на запрос БЕЗ стрима — так ходит только переписыватель
+        # вопроса (`llm.condense_question`). None означает «вернуть
+        # реплику как есть»: это штатное поведение по правилу 4 его
+        # промпта, и переписывания в таком случае не происходит.
+        self.condensed = condensed
         # запросы, которые пришли: тесты смотрят, что именно ушло в модель
         self.requests: list[dict] = []
         self._server: ThreadingHTTPServer | None = None
@@ -66,6 +72,26 @@ class FakeSoro:
                 if outer.status != 200:
                     payload = json.dumps({"error": "нет"}).encode()
                     self.send_response(outer.status)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                    return
+
+                request = outer.requests[-1]
+                if not request.get("stream"):
+                    # Переписывание вопроса: обычный JSON, не SSE. Если
+                    # ответ не задан, отдаём последнюю реплику клиента —
+                    # правило 4 промпта («понятно и без истории»).
+                    text = outer.condensed
+                    if text is None:
+                        content = request["messages"][-1]["content"]
+                        text = content.rsplit(":", 1)[-1].strip()
+                    payload = json.dumps(
+                        {"choices": [{"message": {"content": text}}]},
+                        ensure_ascii=False,
+                    ).encode()
+                    self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(payload)))
                     self.end_headers()

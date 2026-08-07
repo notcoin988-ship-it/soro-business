@@ -112,10 +112,27 @@ async def read_events(client, message_id: str) -> list[tuple[str, dict]]:
     return events
 
 
-async def ask(client, text: str) -> list[tuple[str, dict]]:
-    posted = await client.post("/api/playground/messages", json={"text": text})
+async def ask(
+    client, text: str, thread_id: str | None = None
+) -> list[tuple[str, dict]]:
+    payload: dict = {"text": text}
+    if thread_id:
+        payload["thread_id"] = thread_id
+    posted = await client.post("/api/playground/messages", json=payload)
     assert posted.status_code == 202
     return await read_events(client, posted.json()["message_id"])
+
+
+@pytest.fixture(autouse=True)
+def clean_threads():
+    """История площадки живёт в памяти модуля — чистим между тестами.
+
+    Иначе один тест видел бы ветки другого, и порядок запуска начал бы
+    влиять на результат.
+    """
+    playground._threads.clear()
+    yield
+    playground._threads.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -283,3 +300,112 @@ async def test_question_is_masked_before_search(client, knowledge, soro):
     assert card not in events["retrieval"]["question"]
     assert "[CARD]" in events["retrieval"]["question"]
     assert card not in json.dumps(soro.requests, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# память диалога (thread_id)
+# ---------------------------------------------------------------------------
+
+
+async def test_history_reaches_the_model(client, knowledge, soro):
+    """Второй вопрос уходит в модель вместе с первым обменом.
+
+    Без этого бот не понимает ответ на собственный уточняющий вопрос —
+    та самая поломка, с которой началась память диалога.
+    """
+    await ask(client, "Фоизи амонат чанд аст?", thread_id="t1")
+    await ask(client, "Ҷуброн чӣ хел ҳисоб мешавад?", thread_id="t1")
+
+    roles = [m["role"] for m in soro.requests[-1]["messages"]]
+    assert roles == ["system", "user", "assistant", "user"]
+    assert "Фоизи амонат" in soro.requests[-1]["messages"][1]["content"]
+
+
+async def test_thread_id_is_optional(client, knowledge, soro):
+    """Без `thread_id` память не копится: curl и старые клиенты должны
+    работать по-прежнему."""
+    await ask(client, "Фоизи амонат чанд аст?")
+    await ask(client, "Ҷуброн чӣ хел ҳисоб мешавад?")
+
+    assert [m["role"] for m in soro.requests[-1]["messages"]] == ["system", "user"]
+
+
+async def test_threads_are_isolated(client, knowledge, soro):
+    """Две вкладки — два разговора. Смешать их значит показать одному
+    сотруднику вопросы другого."""
+    await ask(client, "Фоизи амонат чанд аст?", thread_id="t1")
+    await ask(client, "Ҷуброн чӣ хел?", thread_id="t2")
+
+    assert [m["role"] for m in soro.requests[-1]["messages"]] == ["system", "user"]
+
+
+async def test_greeting_is_remembered_too(client, knowledge, soro):
+    """«Салом» отвечается без модели, но в истории остаться обязан:
+    иначе следующий вопрос увидит разговор, начатый с середины."""
+    await ask(client, "салом", thread_id="t1")
+    await ask(client, "Фоизи амонат чанд аст?", thread_id="t1")
+
+    messages = soro.requests[-1]["messages"]
+    assert [m["role"] for m in messages] == ["system", "user", "assistant", "user"]
+    assert messages[1]["content"] == "салом"
+
+
+async def test_follow_up_is_rewritten_and_found(client, knowledge, monkeypatch):
+    """Главный сценарий: реплика, непонятная сама по себе, находится
+    после переписывания по истории.
+
+    Первый поиск проваливает порог, второй — по самостоятельной
+    формулировке — находит, и клиент получает ответ вместо оператора.
+    """
+    # Порог поднят, чтобы две попытки заведомо разошлись. Замер на этих
+    # фикстурах: «а если раньше?» даёт 0,418, переписанная формулировка —
+    # 0,561. Ставим между ними. Больше 0,57 брать нельзя: у bge-m3
+    # таджикская шкала занижена, и даже дословная цитата из фрагмента
+    # выше 0,56 не поднимается (см. ARCHITECTURE.md).
+    monkeypatch.setattr(playground.settings, "RAG_MIN_SCORE", 0.5, raising=False)
+    # Бот в первом ответе САМ называет тему, и переписанный вопрос
+    # состоит из его же слов. Иначе сработает заслон `_looks_rewritten`:
+    # формулировка из ниоткуда — признак того, что модель не переписала
+    # реплику, а сочинила ответ.
+    server = FakeSoro(
+        reply="Ҷуброни пеш аз мӯҳлат аз рӯи фоизи дархостӣ ҳисоб мешавад [1].",
+        condensed="Ҷуброни пеш аз мӯҳлат аз рӯи фоизи дархостӣ",
+    ).start()
+    monkeypatch.setattr(llm.settings, "SORO_API_URL", server.base_url, raising=False)
+    try:
+        await ask(client, "Фоизи амонати «Ояндасоз» чанд аст?", thread_id="t1")
+        events = dict(await ask(client, "а если раньше?", thread_id="t1"))
+    finally:
+        server.stop()
+
+    retrieval = events["retrieval"]
+    assert retrieval["rewritten"], "вопрос не переписали"
+    assert retrieval["searched"] == "Ҷуброни пеш аз мӯҳлат аз рӯи фоизи дархостӣ"
+    assert retrieval["has_answer"]
+    # на экране остаётся то, что человек написал: панель не должна
+    # подменять его вопрос нашей формулировкой
+    assert retrieval["question"] == "а если раньше?"
+    assert not events["final"]["escalated"]
+
+
+async def test_plain_question_is_not_rewritten(client, knowledge, soro):
+    """Вопрос, который нашёлся сразу, переписывать не нужно — ни лишнего
+    вызова модели, ни лишних секунд."""
+    await ask(client, "Фоизи амонат чанд аст?", thread_id="t1")
+    before = len(soro.requests)
+    events = dict(await ask(client, "Фоизи амонат чанд аст?", thread_id="t1"))
+
+    assert not events["retrieval"]["rewritten"]
+    assert events["retrieval"]["searched"] == "Фоизи амонат чанд аст?"
+    # ровно один новый запрос — генерация ответа, без переписывания
+    assert len(soro.requests) - before == 1
+
+
+async def test_thread_cap_drops_oldest(client, knowledge, soro):
+    """Вкладку открывают и забывают — без потолка словарь растёт до
+    перезапуска бэкенда."""
+    for number in range(playground.MAX_THREADS + 5):
+        await ask(client, "салом", thread_id=f"t{number}")
+
+    assert len(playground._threads) <= playground.MAX_THREADS
+    assert "t0" not in playground._threads, "самая старая ветка осталась"

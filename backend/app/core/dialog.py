@@ -31,7 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core import audit, escalation, llm, phrases, policy, rag
+from app.core import audit, context, escalation, llm, phrases, policy, rag
 from app.core.pii import mask
 from app.models import ChannelIdentity, Contact, Conversation, Message, Workspace
 
@@ -233,6 +233,95 @@ async def save_message(
     return message
 
 
+async def load_history(
+    session: AsyncSession, conversation: Conversation, before_id: int
+) -> list[context.Turn]:
+    """Предыдущие реплики диалога — то, что бот «помнит».
+
+    `before_id` — id только что сохранённого входящего сообщения: сам
+    вопрос в историю не входит, он передаётся отдельно.
+
+    БЕРЁМ `text_masked`, а не `text`. История уходит в промпт и дальше в
+    чужой сервис, и это ровно то место, где невнимательность стоит номера
+    карты клиента.
+
+    Реплики оператора включаем наравне с ботом: для клиента это один
+    собеседник, и если оператор что-то уточнил, бот обязан это учитывать.
+    Служебные `system` пропускаем — они не часть разговора.
+    """
+    rows = (
+        await session.scalars(
+            select(Message)
+            .where(
+                Message.conversation_id == conversation.id,
+                Message.id < before_id,
+                Message.role != "system",
+            )
+            .order_by(Message.id.desc())
+            .limit(context.HISTORY_TURNS)
+        )
+    ).all()
+
+    return [
+        context.Turn(
+            role="user" if row.role == "user" else "assistant",
+            text=row.text_masked or row.text,
+        )
+        for row in reversed(rows)
+    ]
+
+
+@dataclass
+class Found:
+    """Результат поиска вместе с тем, ПО ЧЕМУ искали."""
+
+    result: rag.RagResult
+    # запрос, которым в итоге нашли: исходная реплика или переписанная
+    query: str
+    rewritten: bool = False
+
+
+async def search_in_context(
+    session: AsyncSession,
+    workspace_id: int,
+    question: str,
+    history: list[context.Turn],
+) -> Found:
+    """Поиск с опорой на историю — второй попыткой, а не первой.
+
+    ПОРЯДОК ВАЖЕН И ВЫБРАН ПО ЗАМЕРАМ:
+
+    1. ищем по реплике как есть. Обычный вопрос находится сразу, и ни
+       лишнего вызова модели, ни лишних секунд не тратится;
+    2. не нашли и история есть — переписываем реплику в самостоятельный
+       вопрос и ищем ещё раз.
+
+    Второй заход стоит вызова модели (~0,3–0,6 сек) плюс ещё один поиск.
+    Платим этим только там, где иначе была бы эскалация: хуже уже не
+    будет, а «не чи гуна насб кунам?» после уточняющего вопроса бота
+    станет отвечаемым.
+
+    Если и переписанный вопрос ниже порога — возвращаем ПЕРВЫЙ результат.
+    Клиенту в обоих случаях уходит эскалация, а на «Площадке» честнее
+    показать фрагменты по тому, что человек действительно написал.
+    """
+    found = await rag.search(session, question, workspace_id)
+    if found.has_answer or not history:
+        return Found(found, question)
+
+    standalone = await llm.condense_question(history, question)
+    if standalone.strip().casefold() == question.strip().casefold():
+        # переписывать было нечего — модель вернула реплику как есть
+        return Found(found, question)
+
+    retry = await rag.search(session, standalone, workspace_id)
+    if not retry.has_answer:
+        return Found(found, question)
+
+    log.info("вопрос переписан по истории: %r → %r", question, standalone)
+    return Found(retry, standalone, rewritten=True)
+
+
 async def handle_incoming(
     session: AsyncSession,
     *,
@@ -321,8 +410,13 @@ async def handle_incoming(
 
     # RAG и модель. В поиск и в модель уходит text_masked, а не оригинал:
     # так номер карты клиента не попадёт ни в промпт, ни в логи провайдера.
+    # История нужна и поиску (переписать реплику), и модели (понять «не» в
+    # ответ на её же уточняющий вопрос). Читаем ДО ответа и без самого
+    # входящего сообщения — оно передаётся отдельно.
+    history = await load_history(session, conversation, incoming.id)
+
     answer_text, chunks_used, needs_operator, reason = await _answer(
-        session, workspace, incoming.text_masked
+        session, workspace, incoming.text_masked, history
     )
     if needs_operator:
         # Причина `llm_unavailable` в CHECK не входит и схлопнется в
@@ -354,7 +448,10 @@ async def handle_incoming(
 
 
 async def _answer(
-    session: AsyncSession, workspace: Workspace, question: str
+    session: AsyncSession,
+    workspace: Workspace,
+    question: str,
+    history: list[context.Turn] | None = None,
 ) -> tuple[str, list[int], bool, str | None]:
     """Поиск → модель → текст. Возвращает (текст, chunks_used, эскалация, причина).
 
@@ -372,7 +469,9 @@ async def _answer(
     хотя ответ на них есть и найден. Второй фильтр позволит когда-нибудь
     опустить порог, не начав выдумывать.
     """
-    found = await rag.search(session, question, workspace.id)
+    found = (
+        await search_in_context(session, workspace.id, question, history or [])
+    ).result
 
     if not found.has_answer:
         # Причину уточняем и здесь, а не только по ответу модели: вопросы
@@ -389,7 +488,7 @@ async def _answer(
 
     try:
         result = await llm.answer(
-            question, found.hits, bank_name=workspace.name
+            question, found.hits, bank_name=workspace.name, history=history
         )
     except (httpx.HTTPError, httpx.InvalidURL) as exc:
         # Модель недоступна — это не повод показать клиенту трейс. Уводим

@@ -175,3 +175,64 @@ async def test_unavailable_model_does_not_leak_traceback(session, knowledge, sor
     assert reply.reason == "llm_unavailable"
     assert "Traceback" not in reply.text
     assert reply.text == dialog.LLM_DOWN_REPLY
+
+
+# ---------------------------------------------------------------------------
+# память диалога в каналах
+# ---------------------------------------------------------------------------
+
+
+async def test_channel_history_reaches_the_model(session, knowledge, soro):
+    """Второй вопрос уходит в модель вместе с предыдущим обменом.
+
+    В каналах история берётся из `messages` того же диалога, а не из
+    памяти процесса: клиент может продолжить разговор из другого канала,
+    и бот обязан помнить, о чём шла речь (раздел 9.3).
+    """
+    await send(session, "Фоизи амонати «Ояндасоз» чанд аст?")
+    await send(session, "Ҷуброн чӣ хел ҳисоб мешавад?")
+
+    messages = soro.requests[-1]["messages"]
+    assert [m["role"] for m in messages] == ["system", "user", "assistant", "user"]
+    assert "Ояндасоз" in messages[1]["content"]
+
+
+async def test_history_carries_masked_text_only(session, knowledge, soro):
+    """В историю уходит `text_masked`, а не оригинал.
+
+    Инвариант проекта: настоящий номер карты живёт только в
+    `messages.text`. История отправляется в чужой сервис на КАЖДОМ
+    следующем вопросе, поэтому здесь ошибка стоит дороже всего.
+    """
+    card = "5058123456789012"
+    await send(session, f"Корти ман {card}, фоизи амонат чанд аст?")
+    await send(session, "Ҷуброн чӣ хел?")
+
+    import json
+
+    assert card not in json.dumps(soro.requests, ensure_ascii=False)
+    assert "[CARD]" in soro.requests[-1]["messages"][1]["content"]
+
+
+async def test_first_question_has_no_history(session, knowledge, soro):
+    """Первый вопрос диалога — как раньше: система + вопрос."""
+    await send(session, "Фоизи амонати «Ояндасоз» чанд аст?")
+    assert [m["role"] for m in soro.requests[-1]["messages"]] == ["system", "user"]
+
+
+async def test_history_stops_at_conversation_boundary(session, knowledge, soro):
+    """Чужой диалог в историю не попадает.
+
+    Два контакта — два разговора. Смешать их значит показать одному
+    клиенту вопросы другого; для банка это утечка.
+    """
+    await dialog.handle_incoming(
+        session,
+        channel="telegram",
+        external_id="tg-99",
+        text="Фоизи амонати «Ояндасоз» чанд аст?",
+        workspace_slug=WS,
+    )
+    await send(session, "Ҷуброн чӣ хел?")
+
+    assert [m["role"] for m in soro.requests[-1]["messages"]] == ["system", "user"]

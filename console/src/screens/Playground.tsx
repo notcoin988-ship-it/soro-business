@@ -59,24 +59,35 @@ function withCitations(
   onHover: (n: number | null) => void,
 ): React.ReactNode[] {
   const parts: React.ReactNode[] = [];
-  const re = /\[(\d{1,2})\]/g;
+  // Форма скобки — та же, что разбирает бэкенд (`CITE_RE` в core/llm.py).
+  // Модель регулярно объединяет ссылки: «[1, 2]» — две, «[2.1]» — одна,
+  // подпункт второго фрагмента. Строгая форма `\[(\d+)\]` оставляла такую
+  // скобку сырым текстом прямо в ответе клиенту.
+  const re = /\[(\d{1,2}(?:\s*[.,;]\s*\d{1,2})*)\]/g;
   let last = 0;
   let match: RegExpExecArray | null;
   let key = 0;
 
   while ((match = re.exec(text)) !== null) {
     if (match.index > last) parts.push(text.slice(last, match.index));
-    const number = Number(match[1]);
-    parts.push(
-      <sup
-        key={`c${key++}`}
-        className="cite"
-        onMouseEnter={() => onHover(number)}
-        onMouseLeave={() => onHover(null)}
-      >
-        {number}
-      </sup>,
-    );
+    // запятая разделяет ссылки, точка — нумерацию внутри фрагмента
+    const numbers = match[1]
+      .split(/[,;]/)
+      .map((part) => Number(part.match(/\d{1,2}/)?.[0]))
+      .filter((n, index, all) => !Number.isNaN(n) && all.indexOf(n) === index);
+
+    numbers.forEach((number) => {
+      parts.push(
+        <sup
+          key={`c${key++}`}
+          className="cite"
+          onMouseEnter={() => onHover(number)}
+          onMouseLeave={() => onHover(null)}
+        >
+          {number}
+        </sup>,
+      );
+    });
     last = match.index + match[0].length;
   }
   if (last < text.length) parts.push(text.slice(last));
@@ -89,11 +100,11 @@ function withCitations(
 // предыдущий ответ при новом вопросе — значит терять то, что человек
 // только что читал.
 //
-// ВАЖНО, ЧЕГО ЭТО НЕ ДЕЛАЕТ: история копится только на экране. В модель
-// по-прежнему уходит один вопрос без предыдущих (USER_TEMPLATE раздела
-// 6.6 контекста не предусматривает), поэтому «а какой у него минимальный
-// взнос?» вторым сообщением бот не поймёт. Многоходовый диалог — отдельная
-// задача, она нужна и каналам тоже.
+// Эта история — то, что видит человек. В модель предыдущие реплики
+// уходят отдельно: их помнит бэкенд по `thread_id`, который вкладка
+// присылает с каждым вопросом. Держать эти два списка в синхроне не
+// нужно и не следует — здесь показываем разговор, там храним то, что
+// реально ушло в промпт (маскированный текст, без ссылок [1]).
 interface Exchange {
   question: string;
   answer: string;
@@ -124,6 +135,13 @@ export default function Playground() {
 
   const logRef = useRef<HTMLDivElement>(null);
   const sourceRef = useRef<EventSource | null>(null);
+  // Ветка диалога: по ней бэкенд помнит предыдущие реплики. Одна на
+  // вкладку и на всё время её жизни — перезагрузка страницы начинает
+  // разговор заново, как и должно быть на тестовом экране.
+  const threadRef = useRef(
+    `pg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+  );
+  const threadId = threadRef.current;
 
   const busy =
     stage === "request" || stage === "retrieval" || stage === "generation";
@@ -173,7 +191,7 @@ export default function Playground() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, thread_id: threadId }),
       });
       if (!response.ok) throw new Error(await response.text());
       messageId = (await response.json()).message_id;

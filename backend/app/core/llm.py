@@ -33,6 +33,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from collections.abc import AsyncIterator
@@ -41,7 +42,11 @@ from dataclasses import dataclass, field
 import httpx
 
 from app.config import settings
-from app.core.rag import Hit
+from app.core import context
+from app.core.context import Turn
+from app.core.rag import TOKEN_RE, Hit
+
+log = logging.getLogger(__name__)
 
 # --- промпт раздела 6.6 ---------------------------------------------------
 #
@@ -114,6 +119,73 @@ USER_TEMPLATE = """<docs>
 </docs>
 
 Вопрос клиента: {question}"""
+
+# --- переписывание вопроса по истории --------------------------------------
+#
+# Отдельный, очень короткий промпт: задача не «ответить», а «подставить
+# предмет разговора вместо местоимения». Смешивать её с основным промптом
+# нельзя — тот полон правил про ссылки и эскалацию, и модель начинает
+# отвечать вместо того, чтобы переформулировать.
+#
+# Правило 5 («ничего не выдумывай») здесь не для красоты: переписанный
+# вопрос идёт прямо в поиск, и придуманное слово увело бы выдачу в чужой
+# документ незаметно для всех.
+# ЧТО ПОКАЗАЛ ЖИВОЙ ПРОГОН первой версии (не повторять): модель не
+# переписала реплику, а ОТВЕТИЛА на неё, и её ответ ушёл в поиск как
+# запрос:
+#
+#   реплика:  «не чи гуна насб кунам ?»
+#   получили: «Барои насб кардани барномаи… аз мағозаҳои Google Play…
+#              ё App Store… зеркашӣ кунед. Пас аз» (обрыв по max_tokens)
+#
+# Слов «App Store» и «Google Play» в базе знаний нет ни одного — модель
+# их сочинила. Дальше кросс-энкодер честно оценил фрагмент против этой
+# выдумки в 0,902, и бот ответил «по документам», которых не читал.
+# Круговая порука в чистом виде: выдумали запрос — нашли под него
+# подтверждение.
+#
+# Отсюда три правки: запрет отвечать первой строкой, два примера (модель
+# держится их лучше, чем правил) и механическая проверка результата в
+# `_looks_rewritten` — промпт просит не выдумывать, но просьба не
+# гарантия, и проверять надо самим.
+CONDENSE_SYSTEM = """Ты переписываешь реплику клиента в самостоятельный вопрос.
+НЕ ОТВЕЧАЙ на неё — только переформулируй.
+Правила:
+1. Ответь ОДНОЙ короткой строкой — только вопросом, без пояснений.
+2. Подставь предмет разговора из истории вместо «это», «он», «там», «туда».
+3. Язык не меняй: таджикская реплика — таджикский вопрос, русская — русский.
+4. Если реплика и без истории понятна — верни её без изменений.
+5. Не добавляй ни одного слова, которого нет в истории или в реплике.
+
+Пример 1.
+История: Бот: Оё шумо аллакай барномаи «Эсхата Онлайн»-ро насб кардаед?
+Реплика: не чи гуна насб кунам ?
+Ответ: чи гуна барномаи «Эсхата Онлайн»-ро насб кунам?
+
+Пример 2.
+История: Бот: Вклад «Ояндасоз» — 14,5% годовых.
+Реплика: а минимальный взнос?
+Ответ: минимальный взнос по вкладу «Ояндасоз»"""
+
+# Переписанный вопрос — одна короткая строка. Потолка в токенах мало:
+# обрыв длинного ответа посередине всё равно уходит в поиск (см. выше),
+# поэтому длину проверяем и после.
+CONDENSE_MAX_TOKENS = 48
+
+# Потолки на результат. Самостоятельный вопрос короток по природе:
+# «чи гуна барномаи «Эсхата Онлайн»-ро насб кунам?» — 47 символов.
+CONDENSE_MAX_CHARS = 140
+CONDENSE_MAX_WORDS = 16
+
+# Сколько слов «со стороны» допускаем. Ноль ставить нельзя: модель
+# законно вставляет связки («мехоҳед», «хочу»), а таджикская морфология
+# не даёт совпасть точно. Три и больше — это уже не переформулировка.
+CONDENSE_MAX_UNKNOWN = 2
+
+# По скольким первым буквам считаем слово знакомым: «барнома» →
+# «барномаи», «барномаро»; «взнос» → «взноса». Четырёх хватает на
+# однокоренные и мало на то, чтобы склеить разные слова.
+CONDENSE_STEM = 4
 
 # --- разбор ответа --------------------------------------------------------
 
@@ -205,6 +277,10 @@ def pii_topic(question: str) -> bool:
 # длинный: модель генерирует ответ постепенно.
 LLM_TIMEOUT = httpx.Timeout(60.0, connect=5.0)
 
+# Переписывание вопроса — шаг перед поиском, и клиент всё это время ждёт
+# молча. Бюджет жёстче, чем у ответа: не уложились — ищем как есть.
+CONDENSE_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
+
 
 @dataclass
 class Answer:
@@ -241,17 +317,39 @@ def format_fragments(hits: list[Hit]) -> str:
     return "\n\n".join(lines)
 
 
-def build_messages(question: str, hits: list[Hit], bank_name: str) -> list[dict]:
-    """Сообщения для chat/completions."""
-    return [
-        {"role": "system", "content": SYSTEM_PROMPT.format(bank_name=bank_name)},
+def build_messages(
+    question: str,
+    hits: list[Hit],
+    bank_name: str,
+    history: list[Turn] | None = None,
+) -> list[dict]:
+    """Сообщения для chat/completions.
+
+    История — между системным промптом и вопросом, обычными репликами
+    chat API. Без неё бот не понимал ответ на собственный уточняющий
+    вопрос: «не чи гуна насб кунам?» после «Оё шумо барномаро насб
+    кардаед?» читалось как реплика ниоткуда.
+
+    ССЫЛКИ ИЗ ПРОШЛЫХ ОТВЕТОВ ВЫРЕЗАЕМ. Номера [1], [2] в старой реплике
+    указывают на фрагменты ТОГО поиска, а в блоке <docs> сейчас лежат
+    другие. Оставить их — значит показать модели пример, где [2] означает
+    что-то иное, и получить ссылку на чужой документ в новом ответе.
+    """
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT.format(bank_name=bank_name)}
+    ]
+    for turn in context.trim(history or []):
+        text = turn.text if turn.role == "user" else strip_citations(turn.text)
+        messages.append({"role": turn.role, "content": text})
+    messages.append(
         {
             "role": "user",
             "content": USER_TEMPLATE.format(
                 fragments=format_fragments(hits), question=question
             ),
-        },
-    ]
+        }
+    )
+    return messages
 
 
 def strip_citations(text: str) -> str:
@@ -307,11 +405,132 @@ def parse_answer(raw: str, hits: list[Hit], question: str) -> tuple[str, bool, s
     return text, escalate, reason
 
 
+async def condense_question(
+    history: list[Turn],
+    question: str,
+    *,
+    client: httpx.AsyncClient | None = None,
+) -> str:
+    """Реплика клиента + история → самостоятельный вопрос для поиска.
+
+    Возвращает исходную реплику, если переписывать нечего или что-то
+    пошло не так. Отказ здесь не должен ломать ответ: без переписывания
+    поиск отработает как раньше — хуже, но отработает.
+
+    ЗАЧЕМ ЭТО ВООБЩЕ, а не склейка истории с вопросом: склейка пропускает
+    к модели погоду, чужой банк и запрос собственного баланса. Замер и
+    объяснение — в шапке `core/context.py`. Коротко: поиск обязан
+    оценивать САМОСТОЯТЕЛЬНУЮ формулировку, иначе порог перестаёт быть
+    порогом.
+
+    НЕ СТРИМИМ: ответ — одна строка, показывать её клиенту незачем, а
+    стриминг ради 64 токенов только добавляет разбора.
+    """
+    if not history:
+        return question
+
+    payload = {
+        "model": settings.SORO_MODEL,
+        "messages": [
+            {"role": "system", "content": CONDENSE_SYSTEM},
+            {"role": "user", "content": context.as_dialogue(history, question)},
+        ],
+        "max_tokens": CONDENSE_MAX_TOKENS,
+        # Ноль, а не SORO_TEMPERATURE: здесь не нужна вариативность —
+        # нужен один и тот же вопрос при одной и той же истории, иначе
+        # поиск станет нестабильным от запуска к запуску.
+        "temperature": 0.0,
+        "stream": False,
+    }
+    url = settings.SORO_API_URL.rstrip("/") + "/chat/completions"
+    headers = {"Authorization": f"Bearer {settings.SORO_API_KEY}"}
+
+    own_client = client is None
+    if own_client:
+        client = httpx.AsyncClient(timeout=CONDENSE_TIMEOUT)
+    try:
+        response = await client.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        raw = response.json()["choices"][0]["message"]["content"]
+    except (httpx.HTTPError, httpx.InvalidURL, KeyError, IndexError, ValueError) as exc:
+        # Переписывание — необязательный шаг. Молча откатываемся к
+        # исходной реплике: клиент ждёт ответа, а не разбора наших бед.
+        log.warning("не удалось переписать вопрос (%s): %s", type(exc).__name__, exc)
+        return question
+    finally:
+        if own_client:
+            await client.aclose()
+
+    # Источник допустимых слов: история разговора плюс сама реплика.
+    source = " ".join(turn.text for turn in context.trim(history)) + " " + question
+    return _clean_condensed(raw, question, source)
+
+
+def _words(text: str) -> list[str]:
+    """Слова без пунктуации, в нижнем регистре. Однобуквенные отбрасываем."""
+    return [w for w in TOKEN_RE.findall((text or "").lower()) if len(w) > 1]
+
+
+def _looks_rewritten(candidate: str, source: str) -> bool:
+    """Похоже ли это на переформулировку, а не на сочинение.
+
+    ГЛАВНАЯ ПРОВЕРКА ЗДЕСЬ — последняя: у переписанного вопроса не должно
+    быть слов, которых нет ни в истории, ни в самой реплике. Правило 5
+    промпта требует того же, но промпт — просьба. Один живой прогон уже
+    подсунул в поиск выдуманные «App Store» и «Google Play», после чего
+    кросс-энкодер оценил найденный фрагмент против этой выдумки в 0,902
+    и бот ответил «по документам». Механическая проверка такое ловит, а
+    просьба — нет.
+
+    Сравниваем по первым `CONDENSE_STEM` буквам: таджикская и русская
+    морфология не дают совпасть точно («барнома» → «барномаи»).
+    """
+    if len(candidate) > CONDENSE_MAX_CHARS:
+        log.warning("переписанный вопрос слишком длинный (%d симв.)", len(candidate))
+        return False
+
+    words = _words(candidate)
+    if len(words) > CONDENSE_MAX_WORDS:
+        log.warning("переписанный вопрос слишком многословен (%d слов)", len(words))
+        return False
+
+    stems = {w[:CONDENSE_STEM] for w in _words(source)}
+    unknown = [w for w in words if w[:CONDENSE_STEM] not in stems]
+    if len(unknown) > CONDENSE_MAX_UNKNOWN:
+        log.warning("переписанный вопрос принёс чужие слова: %s", unknown)
+        return False
+    return True
+
+
+def _clean_condensed(raw: str, question: str, source: str) -> str:
+    """Сырой ответ переписывателя → вопрос для поиска.
+
+    Модель просили ответить одной строкой, но просьба — не гарантия
+    (см. историю правок промпта). Поэтому:
+
+    * берём первую непустую строку — рассуждение после неё отбрасываем;
+    * снимаем кавычки, в которые модель любит завернуть результат;
+    * не прошло проверку `_looks_rewritten` — возвращаем исходную
+      реплику. Поиск по короткой реплике хуже, чем по хорошей
+      формулировке, но несравнимо лучше, чем по выдумке.
+    """
+    first = next((line.strip() for line in (raw or "").splitlines() if line.strip()), "")
+    first = first.strip("\"'«»").strip()
+    # модель иногда отвечает шаблоном примера: «Ответ: …»
+    if ":" in first[:12]:
+        first = first.split(":", 1)[1].strip()
+    if not first:
+        return question
+
+    return first if _looks_rewritten(first, source) else question
+
+
 async def stream_answer(
     question: str,
     hits: list[Hit],
     *,
     bank_name: str = "Банк Эсхата",
+    history: list[Turn] | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> AsyncIterator[str]:
     """Куски ответа по мере генерации.
@@ -323,7 +542,7 @@ async def stream_answer(
     """
     payload = {
         "model": settings.SORO_MODEL,
-        "messages": build_messages(question, hits, bank_name),
+        "messages": build_messages(question, hits, bank_name, history),
         "max_tokens": settings.SORO_MAX_TOKENS,
         "temperature": settings.SORO_TEMPERATURE,
         "stream": True,
@@ -366,6 +585,7 @@ async def answer(
     hits: list[Hit],
     *,
     bank_name: str = "Банк Эсхата",
+    history: list[Turn] | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> Answer:
     """Собранный ответ. Обёртка над `stream_answer` для каналов без стрима.
@@ -378,7 +598,7 @@ async def answer(
     pieces: list[str] = []
 
     async for piece in stream_answer(
-        question, hits, bank_name=bank_name, client=client
+        question, hits, bank_name=bank_name, history=history, client=client
     ):
         if not pieces:
             first_token_ms = int((time.monotonic() - started) * 1000)
