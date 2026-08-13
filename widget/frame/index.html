@@ -86,6 +86,17 @@
   .src a { cursor: pointer; }
   .src a:hover { border-color: var(--rose-dim); color: var(--paper); }
 
+  /* Оценка работы оператора после закрытия диалога. Живёт в ленте
+     системной репликой: это часть разговора, а не отдельный экран. */
+  .rate { max-width: 100%; }
+  .raterow { display: flex; gap: 8px; justify-content: center; margin-top: 8px; }
+  .raterow button {
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 10px;
+    color: var(--paper); font-size: 17px; line-height: 1; padding: 6px 14px;
+    cursor: pointer;
+  }
+  .raterow button:hover { border-color: var(--rose-dim); }
+
   .dots span {
     display: inline-block; width: 5px; height: 5px; margin-right: 3px;
     border-radius: 50%; background: var(--muted2); animation: blink 1.2s infinite;

@@ -15,11 +15,11 @@
 2. добавлен фильтр по воркспейсу там, где в ТЗ его забыли (подзапрос
    первого сообщения диалога): в базе демо-стенда живёт не один банк.
 
-ЧЕГО ЗДЕСЬ НЕТ И ПОЧЕМУ. Прототип показывает «Оценка ответов 4,4/5 по 380
-оценкам». Таблица `feedback` в схеме есть, но эндпоинта для неё нет ни в
-приложении А, ни в коде, и ни одной строки в ней тоже нет — рисовать
-среднюю оценку не из чего. Экран честно показывает прочерк; вопрос
-«закрывать feedback или выкидывать» ждёт тимлида.
+ОЦЕНКИ КЛИЕНТОВ. Прототип обещает «4,4/5 по 380 оценкам», а в DDL раздела
+5 у оценки стоит `CHECK (score IN (-1, 1))` — палец вверх или вниз.
+Пятибалльную шкалу в эту колонку не положить, поэтому наружу уходит доля
+довольных и число оценок. Противоречие в самом ТЗ; разбор — в шапке
+`core/feedback.py`, решение за тимлидом.
 """
 
 from __future__ import annotations
@@ -135,6 +135,20 @@ LANGUAGES_SQL = text(
 # Блок «требует внимания»: вопросы, на которых бот сдался, потому что
 # ответа не нашлось в документах. Это единственная цифра на экране,
 # которая говорит, что делать дальше — обновить документ.
+# Оценки клиентов. В DDL раздела 5 это палец вверх или вниз
+# (`CHECK score IN (-1, 1)`), поэтому наружу отдаём долю довольных, а не
+# среднее по пятибалльной шкале, которую обещает прототип. Подробности
+# противоречия — в шапке `core/feedback.py`.
+RATING_SQL = text(
+    """
+    SELECT count(*) AS total,
+           count(*) FILTER (WHERE score = 1) AS positive
+    FROM feedback
+    WHERE workspace_id = :ws
+      AND created_at > now() - make_interval(days => :days)
+    """
+)
+
 NO_ANSWER_SQL = text(
     """
     SELECT count(*) AS count
@@ -162,6 +176,7 @@ async def analytics(
     topics = (await session.execute(TOPICS_SQL, params)).mappings().all()
     languages = (await session.execute(LANGUAGES_SQL, params)).mappings().all()
     no_answer = (await session.execute(NO_ANSWER_SQL, params)).scalar()
+    rating = (await session.execute(RATING_SQL, params)).one()
 
     total = conversations.total or 0
     by_bot = conversations.by_bot or 0
@@ -190,6 +205,13 @@ async def analytics(
             {"question": row.question, "count": row.count} for row in topics
         ],
         "attention": {"no_answer": no_answer or 0},
-        # Оценок нет и взяться им пока неоткуда — см. шапку модуля.
-        "rating": None,
+        "rating": {
+            "total": rating.total or 0,
+            "positive": rating.positive or 0,
+            "share": (
+                round(100 * (rating.positive or 0) / rating.total)
+                if rating.total
+                else None
+            ),
+        },
     }

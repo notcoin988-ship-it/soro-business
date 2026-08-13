@@ -3,6 +3,7 @@ import {
   ConversationCard,
   InboxCard,
   InboxStatus,
+  closeConversation,
   getConversation,
   inboxSocket,
   listInbox,
@@ -249,7 +250,7 @@ export default function Inbox() {
                       ? "Передан оператору"
                       : `В работе · ${escalation?.taken_by}`}
                 </span>
-                {waitingForOperator ? (
+                {waitingForOperator && (
                   <button
                     className="btn primary"
                     disabled={busy}
@@ -257,16 +258,28 @@ export default function Inbox() {
                   >
                     Взять в работу
                   </button>
-                ) : (
-                  escalation !== null && (
-                    <button
-                      className="btn"
-                      disabled={busy}
-                      onClick={() => act(() => returnToBot(card.conversation_id))}
-                    >
-                      Вернуть боту
-                    </button>
-                  )
+                )}
+                {!waitingForOperator && escalation !== null && (
+                  <button
+                    className="btn"
+                    disabled={busy}
+                    onClick={() => act(() => returnToBot(card.conversation_id))}
+                  >
+                    Вернуть боту
+                  </button>
+                )}
+                {/* «Закрыть» отличается от «вернуть боту» тем, что
+                    разговор заканчивается совсем: клиент получает
+                    прощание с просьбой оценить работу специалиста, а его
+                    следующее сообщение начнёт новый диалог. */}
+                {card.status !== "closed" && (
+                  <button
+                    className="btn"
+                    disabled={busy}
+                    onClick={() => act(() => closeConversation(card.conversation_id))}
+                  >
+                    Закрыть диалог
+                  </button>
                 )}
               </div>
 

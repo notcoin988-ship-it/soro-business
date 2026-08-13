@@ -238,6 +238,19 @@ export function replyToClient(id: number, text: string): Promise<unknown> {
   });
 }
 
+// «Закрыть диалог» ≠ «вернуть боту». Второе продолжает разговор без
+// оператора, первое его заканчивает: клиент получает прощание с просьбой
+// оценить работу специалиста, а следующее его сообщение начнёт НОВЫЙ
+// диалог.
+export function closeConversation(
+  id: number,
+): Promise<{ status: string; rate_for: number | null }> {
+  return request<{ status: string; rate_for: number | null }>(
+    `/conversations/${id}/close`,
+    { method: "POST" },
+  );
+}
+
 export function returnToBot(id: number): Promise<{ status: string }> {
   return request<{ status: string }>(`/conversations/${id}/resolve`, {
     method: "POST",
@@ -268,8 +281,9 @@ export interface Analytics {
   languages: { lang: string; messages: number }[];
   top_questions: { question: string; count: number }[];
   attention: { no_answer: number };
-  // Средней оценки нет: таблица feedback пуста и без эндпоинта.
-  rating: number | null;
+  // Оценка — палец вверх/вниз (CHECK в DDL), а не пять баллов, которые
+  // обещает прототип. `share` = null, пока не поставили ни одной.
+  rating: { total: number; positive: number; share: number | null };
 }
 
 export function getAnalytics(days = 7): Promise<Analytics> {
