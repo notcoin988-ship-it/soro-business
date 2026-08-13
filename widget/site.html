@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Демо-страница банка — виджет Soro</title>
+<!--
+  «Виджет на сайте банка» — то, что показывают на встрече: вот так это
+  будет выглядеть у вас.
+
+  ЭТО НЕ САЙТ БАНКА И НЕ ЕГО КОПИЯ. Ни логотипа, ни фирменных цветов, ни
+  текстов с eskhata.com здесь нет: страница нейтральная, с плашкой
+  «демонстрация» в шапке. Показывать заказчику подделку под его сайт —
+  плохая идея и на встрече, и в репозитории.
+
+  ЧЕМ ОТЛИЧАЕТСЯ ОТ demo.html. Тот — технический полигон: намеренно
+  враждебные стили, на которых проверяется, что чужой CSS не дотягивается
+  до виджета. Эта страница про другое: она обычная и светлая, и виджет на
+  ней должен выглядеть уместно.
+
+  Продукты в тексте взяты те, что реально лежат в базе знаний стенда
+  («Многоцелевой», «Ипотека», срочный вклад) — чтобы вопросы, заданные
+  прямо с этой страницы, находили ответ, а не эскалацию.
+
+  Открыть: {PUBLIC_BASE_URL}/widget/site
+-->
+<style>
+  :root {
+    --ink: #14232e; --muted: #5b7285; --line: #dde5ea;
+    --paper: #ffffff; --wash: #f2f6f8; --brand: #0f6e5c; --brand-dim: #0b5346;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; color: var(--ink); background: var(--wash);
+    font: 15px/1.6 -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+  .demoflag {
+    background: #fff4d6; border-bottom: 1px solid #ecd9a0; color: #7a5b12;
+    font-size: 12.5px; text-align: center; padding: 7px 14px;
+  }
+  header {
+    background: var(--paper); border-bottom: 1px solid var(--line);
+  }
+  .bar {
+    max-width: 1040px; margin: 0 auto; padding: 16px 22px;
+    display: flex; align-items: center; gap: 26px;
+  }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; }
+  .logo i {
+    width: 30px; height: 30px; border-radius: 8px; background: var(--brand);
+    display: inline-block;
+  }
+  nav { display: flex; gap: 20px; font-size: 14px; color: var(--muted); flex-wrap: wrap; }
+  nav span { cursor: default; }
+  .spacer { flex: 1; }
+  .phone { font-size: 14px; color: var(--brand); font-weight: 600; white-space: nowrap; }
+
+  main { max-width: 1040px; margin: 0 auto; padding: 34px 22px 70px; }
+  .hero {
+    background: var(--paper); border: 1px solid var(--line); border-radius: 16px;
+    padding: 34px; display: grid; grid-template-columns: 1.3fr 1fr; gap: 26px;
+    align-items: center;
+  }
+  .hero h1 { font-size: 30px; line-height: 1.25; margin: 0 0 12px; }
+  .hero p { color: var(--muted); margin: 0 0 20px; }
+  .cta {
+    display: inline-block; background: var(--brand); color: #fff;
+    text-decoration: none; padding: 11px 22px; border-radius: 10px;
+    font-weight: 600; font-size: 14.5px;
+  }
+  .cta:hover { background: var(--brand-dim); }
+  .rate {
+    background: var(--wash); border: 1px dashed var(--line); border-radius: 14px;
+    padding: 22px; text-align: center;
+  }
+  .rate b { display: block; font-size: 38px; color: var(--brand); line-height: 1.1; }
+  .rate small { color: var(--muted); }
+
+  h2 { font-size: 19px; margin: 34px 0 14px; }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .card {
+    background: var(--paper); border: 1px solid var(--line); border-radius: 14px;
+    padding: 20px;
+  }
+  .card h3 { margin: 0 0 6px; font-size: 16px; }
+  .card p { margin: 0 0 12px; color: var(--muted); font-size: 14px; }
+  .card dl { margin: 0; font-size: 13.5px; }
+  .card dt { color: var(--muted); }
+  .card dd { margin: 0 0 8px; font-weight: 600; }
+
+  footer {
+    border-top: 1px solid var(--line); background: var(--paper);
+    color: var(--muted); font-size: 13px;
+  }
+  footer div { max-width: 1040px; margin: 0 auto; padding: 22px; }
+
+  @media (max-width: 860px) {
+    .hero, .cards { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="demoflag">
+  Демонстрационная страница платформы Soro Business. Это не сайт банка:
+  тексты и ставки — пример, оформление нейтральное.
+</div>
+
+<header>
+  <div class="bar">
+    <div class="logo"><i></i> Банк</div>
+    <nav>
+      <span>Частным лицам</span>
+      <span>Бизнесу</span>
+      <span>Карты</span>
+      <span>Кредиты</span>
+      <span>Отделения</span>
+    </nav>
+    <div class="spacer"></div>
+    <div class="phone">1234</div>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div>
+      <h1>Кредит «Многоцелевой» — на всё, что важно именно вам</h1>
+      <p>
+        Сумма до 100 000 сомони, срок до 36 месяцев. Решение по заявке —
+        в день обращения, без залога для зарплатных клиентов.
+      </p>
+      <a class="cta" href="#">Оставить заявку</a>
+    </div>
+    <div class="rate">
+      <b>до 100 000</b>
+      <small>сомони, срок до 36 месяцев</small>
+    </div>
+  </section>
+
+  <h2>Ещё продукты</h2>
+  <div class="cards">
+    <div class="card">
+      <h3>Срочный вклад</h3>
+      <p>Проценты выше при большем сроке, пополнение без ограничений.</p>
+      <dl>
+        <dt>Минимальная сумма</dt><dd>1 000 сомони</dd>
+        <dt>Срок</dt><dd>от 30 до 731 дня</dd>
+      </dl>
+    </div>
+    <div class="card">
+      <h3>Ипотека</h3>
+      <p>На квартиру, дом или строительство. Первоначальный взнос от 20%.</p>
+      <dl>
+        <dt>Срок</dt><dd>до 15 лет</dd>
+        <dt>Досрочное погашение</dt><dd>без комиссии</dd>
+      </dl>
+    </div>
+    <div class="card">
+      <h3>Зарплатная карта</h3>
+      <p>Выпуск и обслуживание бесплатно, снятие в банкоматах банка без комиссии.</p>
+      <dl>
+        <dt>Выпуск</dt><dd>бесплатно</dd>
+        <dt>Переводы внутри банка</dt><dd>0%</dd>
+      </dl>
+    </div>
+  </div>
+
+  <h2>Есть вопрос?</h2>
+  <div class="card">
+    <p style="margin:0">
+      Нажмите круглую кнопку в правом нижнем углу — ответит Soro, помощник
+      банка. Он отвечает по документам банка на таджикском и русском, а если
+      вопрос про ваш счёт — соединит со специалистом. Разговор можно
+      продолжить в Telegram: кнопка под полем ввода.
+    </p>
+  </div>
+</main>
+
+<footer>
+  <div>
+    Демонстрация платформы Soro Business. Ставки и условия на этой странице —
+    пример для показа возможностей помощника, а не публичная оферта.
+  </div>
+</footer>
+
+<!-- Та самая одна строка, которую банк вставляет к себе в шаблон. Здесь
+     адрес относительный: страницу отдаёт тот же бэкенд, что и виджет. На
+     экране 05 консоли показан абсолютный — его копируют в чужой сайт. -->
+<script src="/w.js" data-ws="eskhata-demo" data-lang="tg,ru"></script>
+</body>
+</html>

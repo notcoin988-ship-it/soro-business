@@ -177,9 +177,9 @@ export default function Channels() {
             >
               {copied ? "Скопировано" : "Скопировать"}
             </button>
-            {widget?.demo_url && (
-              <a className="btn" href={widget.demo_url} target="_blank" rel="noopener">
-                Открыть демо-страницу
+            {widget?.site_url && (
+              <a className="btn" href={widget.site_url} target="_blank" rel="noopener">
+                Показать на сайте
               </a>
             )}
           </div>
