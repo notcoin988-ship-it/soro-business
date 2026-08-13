@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import httpx
@@ -353,11 +354,19 @@ async def handle_incoming(
     text: str,
     display_name: str | None = None,
     workspace_slug: str | None = None,
+    on_delta: Callable[[str], None] | None = None,
 ) -> Reply | None:
     """Путь одного сообщения. `None` — бот отвечать не должен.
 
     `None` возвращается, когда диалогом занимается оператор: бот не
     перебивает живого человека, сообщение просто ложится в инбокс.
+
+    `on_delta` зовётся на каждый кусок ответа модели — для каналов, где
+    текст показывают по мере генерации (виджет, раздел 7.2). Куски идут
+    ДО правок: повтор, снятие ссылок и подмена на фразу об эскалации
+    случаются уже после того, как поток закончился, и канал обязан
+    заменить показанное текстом из `Reply`. Иначе клиент останется с
+    ответом, который мы решили не отправлять.
     """
     started = time.monotonic()
 
@@ -439,7 +448,7 @@ async def handle_incoming(
     history = await load_history(session, conversation, incoming.id)
 
     answer_text, chunks_used, needs_operator, reason = await _answer(
-        session, workspace, incoming.text_masked, history
+        session, workspace, incoming.text_masked, history, on_delta=on_delta
     )
     if needs_operator:
         # Причина `llm_unavailable` в CHECK не входит и схлопнется в
@@ -475,6 +484,8 @@ async def _answer(
     workspace: Workspace,
     question: str,
     history: list[context.Turn] | None = None,
+    *,
+    on_delta: Callable[[str], None] | None = None,
 ) -> tuple[str, list[int], bool, str | None]:
     """Поиск → модель → текст. Возвращает (текст, chunks_used, эскалация, причина).
 
@@ -511,7 +522,11 @@ async def _answer(
 
     try:
         result = await llm.answer(
-            question, found.hits, bank_name=workspace.name, history=history
+            question,
+            found.hits,
+            bank_name=workspace.name,
+            history=history,
+            on_delta=on_delta,
         )
     except (httpx.HTTPError, httpx.InvalidURL) as exc:
         # Модель недоступна — это не повод показать клиенту трейс. Уводим

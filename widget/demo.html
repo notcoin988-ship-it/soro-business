@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Тестовая страница банка — виджет Soro</title>
+<!--
+  Страница-полигон для виджета (критерий готовности раздела 7: «одно и то
+  же „Салом“ из Telegram, из виджета на тестовой странице и из WhatsApp
+  создаёт три диалога, видимые в консоли»).
+
+  Это НЕ сайт банка и не его макет: намеренно светлая, пустая и чужая по
+  стилю. Виджет обязан выглядеть одинаково и здесь, и на eskhata.com, и
+  ровно это на ней проверяется — что чужой CSS до него не дотягивается.
+
+  Открыть: {PUBLIC_BASE_URL}/widget/demo
+-->
+<style>
+  body {
+    margin: 0; padding: 48px 24px;
+    font: 16px/1.6 Georgia, "Times New Roman", serif;
+    color: #1a2733; background: #f4f1ea;
+  }
+  main { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 30px; margin: 0 0 6px; }
+  p.lead { color: #5b6b7a; margin-top: 0; }
+  /* Правила, которые нарочно ломали бы виджет, будь он встроен в DOM
+     страницы, а не в iframe: цвет, шрифт и радиусы у всех кнопок сразу. */
+  button, svg { all: revert; }
+  button { background: #1a2733 !important; color: #f4f1ea; border-radius: 0; }
+  .card {
+    background: #fff; border: 1px solid #dcd6c8; padding: 20px 22px;
+    margin-top: 22px;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Тестовая страница</h1>
+  <p class="lead">
+    Здесь проверяется виджет: кнопка в правом нижнем углу, диалог в iframe,
+    «Продолжить в Telegram».
+  </p>
+
+  <div class="card">
+    <p>
+      Стили этой страницы намеренно враждебны: чужой шрифт, чужие цвета и
+      правило <code>button { background: #1a2733 !important }</code>. Виджет
+      не должен от него измениться — он живёт в iframe.
+    </p>
+    <p>
+      Что проверить: диалог сохраняется после F5; ответ печатается кусками;
+      под ответом видны бейджи источников; кнопка «Продолжить в Telegram»
+      открывает бота, и после <code>/start</code> история из этого окна
+      видна в Telegram.
+    </p>
+  </div>
+</main>
+
+<!-- Тот самый сниппет, который банк вставляет к себе. Адрес относительный:
+     страницу отдаёт тот же бэкенд, что и виджет. В консоли на экране 05
+     показывается абсолютный — его копируют в чужой шаблон. -->
+<script src="/w.js" data-ws="eskhata-demo" data-lang="tg,ru"></script>
+</body>
+</html>

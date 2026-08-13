@@ -92,6 +92,10 @@ export interface WorkspaceInfo {
   // а отвечает GPTQ-int4, и подпись на демо должна совпадать с фактом
   model: string;
   security: Security;
+  // адрес этого стенда: из него собирается сниппет виджета на экране 05.
+  // На демо это ngrok, и он меняется при каждом перезапуске туннеля
+  public_base_url: string;
+  telegram_bot: string;
 }
 
 export function getWorkspace(): Promise<WorkspaceInfo> {

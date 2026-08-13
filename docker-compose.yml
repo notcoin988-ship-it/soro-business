@@ -60,6 +60,9 @@ services:
       - "./backend:/code"
       - "./scripts:/code/scripts"
       - "./tests:/code/tests"
+      # Файлы виджета (раздел 7.2): бэкенд отдаёт loader.js по /w.js и
+      # содержимое iframe по /widget/frame. Отдельного CDN у демо нет.
+      - "./widget:/code/widget"
       - "uploads:/data/uploads"
 
   worker:
