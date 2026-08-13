@@ -12,6 +12,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
+from app.config import settings
 from app.core import dialog, escalation
 from app.db import get_session
 from app.main import app
@@ -22,7 +23,12 @@ CARD = "5058123456789012"
 
 
 @pytest.fixture
-async def client(session):
+async def client(session, workspace, monkeypatch):
+    # Инбокс отдаёт диалоги ТОЛЬКО своего воркспейса (иначе оператор
+    # одного банка видит переписку другого — ручной прогон это поймал).
+    # Тесты работают в своём воркспейсе, значит и эндпоинт должен считать
+    # его текущим.
+    monkeypatch.setattr(settings, "WORKSPACE_DEFAULT_SLUG", workspace.slug)
     app.dependency_overrides[get_session] = lambda: session
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"

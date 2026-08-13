@@ -51,6 +51,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import escalation
+from app.core.dialog import get_workspace
 from app.db import get_session
 from app.models import (
     ChannelIdentity,
@@ -163,8 +164,18 @@ async def list_inbox(
     status: str = Query("waiting", pattern="^(waiting|active|resolved)$"),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict]:
-    """Левая колонка экрана 06: кто ждёт, из какого канала, с чем."""
-    query = select(Escalation).order_by(Escalation.created_at.desc())
+    """Левая колонка экрана 06: кто ждёт, из какого канала, с чем.
+
+    Фильтр по воркспейсу обязателен: без него оператор одного банка видел
+    в своей очереди чужие диалоги (`escalations.workspace_id` в схеме
+    есть с первого дня, а в запросе его не было).
+    """
+    workspace = await get_workspace(session)
+    query = (
+        select(Escalation)
+        .where(Escalation.workspace_id == workspace.id)
+        .order_by(Escalation.created_at.desc())
+    )
     if status == "waiting":
         query = query.where(
             Escalation.resolved_at.is_(None), Escalation.taken_by.is_(None)
@@ -314,8 +325,17 @@ async def _hint(session: AsyncSession, messages: list[Message]) -> list[dict]:
 async def _conversation_or_404(
     session: AsyncSession, conversation_id: int
 ) -> Conversation:
+    """Диалог ЭТОГО воркспейса. Чужой — те же 404, что несуществующий.
+
+    Проверка воркспейса тут не формальность. Пока банк был один, её
+    отсутствия никто не замечал; с появлением кнопки «Добавить банк»
+    оператор одного банка, подставив чужой id, читал переписку другого и
+    мог в неё ответить — ручной прогон это и показал. 404, а не 403:
+    существование чужого диалога тоже не наше дело.
+    """
+    workspace = await get_workspace(session)
     conversation = await session.get(Conversation, conversation_id)
-    if conversation is None:
+    if conversation is None or conversation.workspace_id != workspace.id:
         raise HTTPException(status_code=404, detail="диалог не найден")
     return conversation
 
@@ -525,15 +545,24 @@ async def close_conversation(
 
 @router.get("/api/inbox/counters")
 async def counters(session: AsyncSession = Depends(get_session)) -> dict:
-    """Бейдж непрочитанного в меню консоли."""
+    """Бейдж непрочитанного в меню консоли — по своему банку."""
+    workspace = await get_workspace(session)
     waiting = await session.scalar(
         select(func.count())
         .select_from(Escalation)
-        .where(Escalation.resolved_at.is_(None), Escalation.taken_by.is_(None))
+        .where(
+            Escalation.workspace_id == workspace.id,
+            Escalation.resolved_at.is_(None),
+            Escalation.taken_by.is_(None),
+        )
     )
     active = await session.scalar(
         select(func.count())
         .select_from(Escalation)
-        .where(Escalation.resolved_at.is_(None), Escalation.taken_by.is_not(None))
+        .where(
+            Escalation.workspace_id == workspace.id,
+            Escalation.resolved_at.is_(None),
+            Escalation.taken_by.is_not(None),
+        )
     )
     return {"waiting": waiting or 0, "active": active or 0}

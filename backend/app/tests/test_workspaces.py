@@ -12,7 +12,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from app.core import current, dialog
+from app.core import current, dialog, escalation
 from app.db import get_session
 from app.main import app
 from app.models import Workspace
@@ -119,6 +119,54 @@ async def test_header_switches_the_workspace(client, session):
 
     assert info["slug"] == "bank-header"
     assert info["name"] == "Банк заголовка"
+
+
+async def test_inbox_of_another_bank_is_invisible(client, session, workspace):
+    """НАЙДЕНО РУЧНЫМ ПРОГОНОМ. Инбокс не фильтровал по воркспейсу, и с
+    появлением кнопки «Добавить банк» оператор одного банка видел в своей
+    очереди чужие диалоги, читал переписку по id и мог в неё ОТВЕТИТЬ.
+
+    Пока банк был один, этого никто не замечал: `escalations.workspace_id`
+    в схеме есть с первого дня, а в запросе его не было.
+    """
+    identity = await dialog.resolve_identity(
+        session, workspace.id, "widget", "leak-1"
+    )
+    conversation = await dialog.resolve_conversation(
+        session, workspace.id, identity.contact_id
+    )
+    await dialog.save_message(
+        session,
+        conversation=conversation,
+        channel="widget",
+        role="user",
+        text="Секрет одного банка",
+    )
+    await escalation.escalate(session, conversation, escalation.REASON_USER_REQUEST)
+    await session.flush()
+
+    async with client:
+        await client.post(
+            "/api/workspaces", json={"slug": "bank-nosy", "name": "Любопытный"}
+        )
+        headers = {current.HEADER: "bank-nosy"}
+
+        queue = (await client.get("/api/inbox?status=waiting", headers=headers)).json()
+        counters = (await client.get("/api/inbox/counters", headers=headers)).json()
+        card = await client.get(
+            f"/api/conversations/{conversation.id}", headers=headers
+        )
+        reply = await client.post(
+            f"/api/conversations/{conversation.id}/reply",
+            json={"text": "здравствуйте"},
+            headers=headers,
+        )
+
+    assert queue == []
+    assert counters == {"waiting": 0, "active": 0}
+    # 404, а не 403: существование чужого диалога тоже не наше дело.
+    assert card.status_code == 404
+    assert reply.status_code == 404
 
 
 async def test_documents_of_another_bank_are_invisible(client, session, workspace):
