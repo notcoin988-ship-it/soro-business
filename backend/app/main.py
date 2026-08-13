@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import analytics, console, inbox, overview, playground
+from app.api import analytics, channels, console, inbox, overview, playground
 from app.channels import telegram, widget
 from app.config import settings
 
@@ -21,6 +21,7 @@ app.include_router(playground.router)
 app.include_router(inbox.router)
 app.include_router(analytics.router)
 app.include_router(overview.router)
+app.include_router(channels.router)
 # Каналы подключаются по мере готовности. Telegram первый — раздел 7.1.
 app.include_router(telegram.router)
 app.include_router(widget.router)

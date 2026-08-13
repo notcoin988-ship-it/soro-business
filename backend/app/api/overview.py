@@ -22,14 +22,14 @@
 
 from __future__ import annotations
 
-import re
+
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.analytics import CONVERSATIONS_SQL, LATENCY_SQL
-from app.config import settings
+from app.config import is_filled, settings
 from app.core.dialog import get_workspace
 from app.db import get_session
 
@@ -194,25 +194,6 @@ async def overview(session: AsyncSession = Depends(get_session)) -> dict:
     }
 
 
-# Плейсхолдеры в `.env`. Живой прогон показал, зачем это нужно: в файле
-# стенда лежит `WHATSAPP_TOKEN=ЗАПРОСИ-У-ТИМЛИДА`, и обычная проверка «не
-# пусто» ставила галочку напротив неподключённого канала — ровно то, чего
-# на первом экране быть не должно.
-#
-# Правило простое и не требует списка: настоящий токен, id и адрес не
-# содержат кириллицы и не кончаются многоточием. `.env.example` весь такой
-# по построению — «EAAG...», «123456:ABC...», «поменять-обязательно».
-_PLACEHOLDER_RE = re.compile(r"[А-Яа-яЁё]")
-
-
-def _filled(value: str | None) -> bool:
-    """Задано ли значение по-настоящему, а не «запросить у тимлида»."""
-    value = (value or "").strip()
-    if not value or value.endswith("..."):
-        return False
-    return not _PLACEHOLDER_RE.search(value)
-
-
 def _readiness(documents) -> list[dict]:
     """Чек-лист готовности к пилоту — по факту, а не по прототипу.
 
@@ -221,9 +202,9 @@ def _readiness(documents) -> list[dict]:
     """
     ready = documents.ready or 0
     chunks = documents.chunks or 0
-    telegram = _filled(settings.TELEGRAM_BOT_TOKEN)
-    whatsapp = _filled(settings.WHATSAPP_TOKEN) and _filled(settings.WHATSAPP_PHONE_ID)
-    public = _filled(settings.PUBLIC_BASE_URL)
+    telegram = is_filled(settings.TELEGRAM_BOT_TOKEN)
+    whatsapp = is_filled(settings.WHATSAPP_TOKEN) and is_filled(settings.WHATSAPP_PHONE_ID)
+    public = is_filled(settings.PUBLIC_BASE_URL)
     host = settings.PUBLIC_BASE_URL.rstrip("/")
 
     return [
