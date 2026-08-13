@@ -102,18 +102,19 @@ THANKS = "Раҳмат барои баҳо!\nСпасибо за оценку!"
 
 
 def rating_keyboard(message_id: int) -> InlineKeyboardMarkup:
-    """Две кнопки под прощальным сообщением."""
+    """Пять звёзд под прощальным сообщением.
+
+    Одним рядом: пять коротких кнопок помещаются в строку на любом
+    телефоне, а два ряда по три выглядят как выбор из шести.
+    """
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="👍 Понравилось",
-                    callback_data=f"{RATE_PREFIX}{message_id}:{feedback.UP}",
-                ),
-                InlineKeyboardButton(
-                    text="👎 Нет",
-                    callback_data=f"{RATE_PREFIX}{message_id}:{feedback.DOWN}",
-                ),
+                    text="★" * score,
+                    callback_data=f"{RATE_PREFIX}{message_id}:{score}",
+                )
+                for score in feedback.SCORES
             ]
         ]
     )

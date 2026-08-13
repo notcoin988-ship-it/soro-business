@@ -311,9 +311,8 @@ export interface Analytics {
   languages: { lang: string; messages: number }[];
   top_questions: { question: string; count: number }[];
   attention: { no_answer: number };
-  // Оценка — палец вверх/вниз (CHECK в DDL), а не пять баллов, которые
-  // обещает прототип. `share` = null, пока не поставили ни одной.
-  rating: { total: number; positive: number; share: number | null };
+  // Средняя оценка по пятибалльной шкале; null, пока не поставили ни одной.
+  rating: { total: number; average: number | null };
 }
 
 export function getAnalytics(days = 7): Promise<Analytics> {

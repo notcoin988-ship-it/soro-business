@@ -124,12 +124,14 @@ export default function Analytics() {
             плашка «—» на месте KPI выглядит поломкой, а медиана считается
             запросом из того же приложения Б и проверяет норматив приёмки.
             Появилась первая оценка — карточка становится оценкой. */}
-        {data && data.rating.total > 0 ? (
+        {data && data.rating.average !== null ? (
           <div className="card">
-            <div className="eyebrow">Оценка работы оператора</div>
-            <div className="stat brass">{data.rating.share}%</div>
+            <div className="eyebrow">Оценка ответов</div>
+            <div className="stat brass">
+              {String(data.rating.average).replace(".", ",")}/5
+            </div>
             <div className="substat">
-              довольных из {data.rating.total} оценок
+              по {data.rating.total} оценкам клиентов
             </div>
           </div>
         ) : (

@@ -16,7 +16,7 @@
   :root {
     --ink: #110710; --panel: #1B0F19; --panel2: #241522; --raise: #2C1A29;
     --line: #3A2436; --paper: #F6EEF3; --muted: #B49AAC; --muted2: #7E6577;
-    --rose: #E8506B; --rose-dim: #B33E55; --ok: #5FC79E;
+    --rose: #E8506B; --rose-dim: #B33E55; --ok: #5FC79E; --brass: #DCA84C;
     --r: 16px;
   }
   * { box-sizing: border-box; }
@@ -89,13 +89,15 @@
   /* Оценка работы оператора после закрытия диалога. Живёт в ленте
      системной репликой: это часть разговора, а не отдельный экран. */
   .rate { max-width: 100%; }
-  .raterow { display: flex; gap: 8px; justify-content: center; margin-top: 8px; }
-  .raterow button {
-    background: var(--panel2); border: 1px solid var(--line); border-radius: 10px;
-    color: var(--paper); font-size: 17px; line-height: 1; padding: 6px 14px;
-    cursor: pointer;
+  .raterow { display: flex; gap: 4px; justify-content: center; margin-top: 8px; }
+  .raterow .star {
+    background: none; border: 0; padding: 2px 3px; cursor: pointer;
+    font-size: 21px; line-height: 1; color: var(--line);
+    transition: color .12s, transform .12s;
   }
-  .raterow button:hover { border-color: var(--rose-dim); }
+  /* Подсвечиваются все звёзды до наведённой: человек ставит «четыре», а
+     не «четвёртую». Класс вешает widget.js — на CSS такое не выразить. */
+  .raterow .star.lit { color: var(--brass, #DCA84C); transform: scale(1.08); }
 
   .dots span {
     display: inline-block; width: 5px; height: 5px; margin-right: 3px;
