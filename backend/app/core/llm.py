@@ -36,7 +36,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 
 import httpx
@@ -611,11 +611,19 @@ async def answer(
     bank_name: str = "Банк Эсхата",
     history: list[Turn] | None = None,
     client: httpx.AsyncClient | None = None,
+    on_delta: Callable[[str], None] | None = None,
 ) -> Answer:
     """Собранный ответ. Обёртка над `stream_answer` для каналов без стрима.
 
     Telegram и WhatsApp тоже стримят, но в БД и в тесты нужен готовый
     текст, поэтому сборка живёт здесь, а не размазана по каналам.
+
+    `on_delta` — щель для тех каналов, которым текст нужен ПО ХОДУ, а не
+    только целиком: виджет показывает ответ по мере генерации. Без неё
+    каналу пришлось бы звать `stream_answer` самому и повторять всё, что
+    делает `dialog`: эскалацию, аудит, запись в `messages`. Колбэк
+    синхронный намеренно — он только кладёт кусок в очередь, и ждать его
+    посреди приёма потока незачем.
     """
     started = time.monotonic()
     first_token_ms = 0
@@ -627,6 +635,8 @@ async def answer(
         if not pieces:
             first_token_ms = int((time.monotonic() - started) * 1000)
         pieces.append(piece)
+        if on_delta is not None:
+            on_delta(piece)
 
     raw = "".join(pieces)
     text, escalate, reason = parse_answer(raw, hits, question)

@@ -381,6 +381,25 @@ async def _send_to_channel(
     сообщение всё равно сохраняется в базе и видно в консоли, а в лог
     уходит предупреждение: молча терять ответ оператора нельзя.
     """
+    if channel == "widget":
+        # Виджет слушает свой SSE-поток: ответ оператора кладём туда же,
+        # куда уходят ответы бота. Идентичность нужна, чтобы знать uid —
+        # поток живёт на нём.
+        identity = await session.scalar(
+            select(ChannelIdentity).where(
+                ChannelIdentity.contact_id == conversation.contact_id,
+                ChannelIdentity.channel == "widget",
+            )
+        )
+        if identity is None:
+            log.warning("у контакта %s нет widget-идентичности", conversation.contact_id)
+            return
+
+        from app.channels.widget import publish
+
+        publish(identity.external_id, "operator_msg", {"text": text})
+        return
+
     if channel != "telegram":
         log.warning("канал %s ещё не умеет отправлять — ответ только в базе", channel)
         return

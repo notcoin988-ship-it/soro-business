@@ -153,6 +153,12 @@ async def get_workspace_info(
         "name": workspace.name,
         "model": settings.SORO_MODEL,
         "security": policy.security(workspace),
+        # Экран 05 показывает сниппет для сайта банка и QR на бота. И то,
+        # и другое — адреса ЭТОГО стенда: на демо через ngrok они меняются
+        # при каждом перезапуске туннеля, и зашитый в код адрес означал бы
+        # сниппет, который не работает, и QR, ведущий в никуда.
+        "public_base_url": settings.PUBLIC_BASE_URL.rstrip("/"),
+        "telegram_bot": settings.TELEGRAM_BOT_USERNAME,
     }
 
 

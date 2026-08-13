@@ -4,10 +4,14 @@
 должно быть — она в core/.
 """
 
+from pathlib import Path
+
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api import console, inbox, playground
-from app.channels import telegram
+from app.channels import telegram, widget
 from app.config import settings
 
 app = FastAPI(title="Soro Business Console", version="1.0.0")
@@ -17,6 +21,52 @@ app.include_router(playground.router)
 app.include_router(inbox.router)
 # Каналы подключаются по мере готовности. Telegram первый — раздел 7.1.
 app.include_router(telegram.router)
+app.include_router(widget.router)
+
+# Файлы виджета: их отдаёт тот же бэкенд, что и API. В ТЗ сниппет банка
+# ссылается на cdn.sorollm.tj/w.js, но CDN у демо-стенда нет и не будет —
+# адрес берётся из PUBLIC_BASE_URL, он же ngrok на встрече.
+#
+# Каталог ищем в двух местах, потому что дерево внутри контейнера другое:
+# там корень проекта — это `backend/`, смонтированный как `/code`, и
+# `widget/` подмонтирован рядом (`/code/widget`). На хосте — на уровень
+# выше, в корне репозитория. Один путь на оба случая не подобрать.
+_BACKEND_DIR = Path(__file__).resolve().parent.parent
+WIDGET_DIR = next(
+    (
+        candidate
+        for candidate in (_BACKEND_DIR / "widget", _BACKEND_DIR.parent / "widget")
+        if candidate.is_dir()
+    ),
+    _BACKEND_DIR / "widget",
+)
+
+if WIDGET_DIR.is_dir():
+    # Загрузчик лежит по короткому адресу: он попадает в шаблон сайта
+    # банка, и чем короче строка, тем меньше шансов её переврать.
+    @app.get("/w.js", include_in_schema=False)
+    async def loader() -> FileResponse:
+        return FileResponse(
+            WIDGET_DIR / "loader.js",
+            media_type="application/javascript",
+            # Загрузчик меняется вместе с виджетом, а сайт банка кеширует
+            # скрипты надолго. Пять минут — компромисс: демо переживает
+            # правку, а сайт не ходит за файлом на каждый переход.
+            headers={"Cache-Control": "public, max-age=300"},
+        )
+
+    # Страница-полигон: критерий готовности раздела 7 требует проверить
+    # виджет «на тестовой странице», и она должна быть под рукой, а не
+    # собираться заново перед каждой проверкой.
+    @app.get("/widget/demo", include_in_schema=False)
+    async def widget_demo() -> FileResponse:
+        return FileResponse(WIDGET_DIR / "demo.html", media_type="text/html")
+
+    app.mount(
+        "/widget/frame",
+        StaticFiles(directory=WIDGET_DIR / "frame", html=True),
+        name="widget-frame",
+    )
 
 
 @app.get("/health")

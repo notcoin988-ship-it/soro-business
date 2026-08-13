@@ -29,9 +29,12 @@ from aiogram.enums import ParseMode
 from aiogram.types import Message, Update
 from fastapi import APIRouter, Header, HTTPException, Request
 
+from app.channels import widget
 from app.config import settings
-from app.core.dialog import handle_incoming
+from app.core import linking
+from app.core.dialog import handle_incoming, resolve_identity
 from app.db import SessionLocal
+from app.models import ChannelIdentity
 
 log = logging.getLogger(__name__)
 
@@ -86,6 +89,47 @@ def display_name(message: Message) -> str | None:
     return name or user.username
 
 
+async def link_from_widget(token: str, message: Message) -> bool:
+    """Склеить контакт этого telegram-пользователя с контактом виджета.
+
+    Возвращает, состоялась ли склейка. Неудача — это норма: токен
+    одноразовый и живёт 15 минут, а `/start` с чужим или протухшим хвостом
+    прилетает от кого угодно. Клиенту об этом знать незачем: он увидит
+    обычное приветствие и начнёт разговор заново — хуже, чем могло быть,
+    но не сломано.
+
+    ОШИБКИ ГЛУШИМ. Этот вызов стоит на пути `/start`: если Redis лежит или
+    склейка упала, поздороваться бот обязан всё равно.
+    """
+    try:
+        identity_id = widget.take_token(token)
+        if identity_id is None:
+            return False
+
+        async with SessionLocal() as session:
+            widget_identity = await session.get(ChannelIdentity, identity_id)
+            if widget_identity is None:
+                log.warning("токен склейки указывает на исчезнувшую идентичность")
+                return False
+
+            telegram_identity = await resolve_identity(
+                session,
+                workspace_id=widget_identity.workspace_id,
+                channel=CHANNEL,
+                external_id=str(message.from_user.id),
+                display_name=display_name(message),
+            )
+            await linking.link_identities(
+                session, first=widget_identity, second=telegram_identity
+            )
+            await session.commit()
+    except Exception:  # noqa: BLE001 — приветствие важнее склейки
+        log.exception("не удалось склеить контакты по токену")
+        return False
+
+    return True
+
+
 async def answer_for(message: Message) -> str | None:
     """Что ответить на сообщение. Отдельно от отправки — чтобы тестировать
     без сети и без Telegram.
@@ -96,8 +140,12 @@ async def answer_for(message: Message) -> str | None:
         return NON_TEXT_REPLY
 
     if message.text.startswith("/start"):
-        # Хвост после /start — это link_token из виджета (раздел 5.1).
-        # Склейка контактов появится вместе с channels/widget.py.
+        # Хвост после /start — это link_token из виджета (раздел 5.1):
+        # клиент нажал «Продолжить в Telegram», и оба канала должны стать
+        # одним человеком.
+        token = message.text[len("/start") :].strip()
+        if token:
+            await link_from_widget(token, message)
         return GREETING
 
     async with SessionLocal() as session:
