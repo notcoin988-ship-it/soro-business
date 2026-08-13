@@ -161,6 +161,10 @@ def _widget(conversations: int, host: str, public: bool) -> dict:
             f'  data-ws="{settings.WORKSPACE_DEFAULT_SLUG}"\n'
             f'  data-lang="tg,ru"></script>'
         ),
+        # На экране 05 ведём на страницу-сайт, а не на технический
+        # полигон: экран показывают заказчику, и «вот так это выглядит у
+        # вас» убедительнее, чем страница с намеренно ломаными стилями.
+        "site_url": f"{host}/widget/site" if public else None,
         "demo_url": f"{host}/widget/demo" if public else None,
         "conversations": conversations,
     }

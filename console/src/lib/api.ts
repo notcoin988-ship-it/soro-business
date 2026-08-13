@@ -142,6 +142,9 @@ export interface ChannelCard {
   link?: string | null;
   webhook?: { url: string; pending: number; error: string | null } | null;
   snippet?: string;
+  // site_url — страница-пример сайта банка с виджетом (её показывают),
+  // demo_url — технический полигон с враждебными стилями.
+  site_url?: string | null;
   demo_url?: string | null;
 }
 

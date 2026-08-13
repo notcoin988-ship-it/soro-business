@@ -65,6 +65,14 @@ if WIDGET_DIR.is_dir():
     async def widget_demo() -> FileResponse:
         return FileResponse(WIDGET_DIR / "demo.html", media_type="text/html")
 
+    # Две страницы намеренно. `/widget/demo` — технический полигон с
+    # враждебными стилями: на нём проверяют, что чужой CSS не дотягивается
+    # до виджета. `/widget/site` — то, что показывают заказчику: обычная
+    # светлая страница банка, на которой виджет должен выглядеть уместно.
+    @app.get("/widget/site", include_in_schema=False)
+    async def widget_site() -> FileResponse:
+        return FileResponse(WIDGET_DIR / "site.html", media_type="text/html")
+
     app.mount(
         "/widget/frame",
         StaticFiles(directory=WIDGET_DIR / "frame", html=True),

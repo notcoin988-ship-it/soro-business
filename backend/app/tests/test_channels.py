@@ -155,6 +155,7 @@ async def test_snippet_carries_the_address_of_this_stand(client):
 
     assert widget["state"] == "live"
     assert 'src="https://stand.example/w.js"' in widget["snippet"]
+    assert widget["site_url"] == "https://stand.example/widget/site"
     assert widget["demo_url"] == "https://stand.example/widget/demo"
 
 
@@ -163,6 +164,7 @@ async def test_widget_without_public_address_waits(client, monkeypatch):
 
     widget = card(await get(client), "widget")
     assert widget["state"] == "wait"
+    assert widget["site_url"] is None
     assert widget["demo_url"] is None
     # Заглушка из .env не должна выглядеть как адрес: скопированная в
     # шаблон сайта банка, она там и останется.
