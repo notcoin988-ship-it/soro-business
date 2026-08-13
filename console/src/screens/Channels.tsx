@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { ChannelCard, ChannelsInfo, getChannels } from "../lib/api";
 import { useLang } from "../lib/lang";
+import { Failed } from "../components/State";
 
 // Экран 05 — Каналы. Разметка из прототипа (секция ch), но экран рабочий,
 // а не витринный: по нему перед встречей проверяют, что каналы живы.
@@ -140,7 +141,7 @@ export default function Channels() {
         </button>
       </div>
 
-      {error && <div className="fail">{error}</div>}
+      {error && <Failed text={error} onRetry={load} />}
 
       <div className="grid g3">
         <div className="chcard">

@@ -9,6 +9,7 @@ import {
   uploadFile,
 } from "../lib/api";
 import Confirm, { ConfirmRequest } from "../components/Confirm";
+import { Empty, Failed, Loading } from "../components/State";
 
 // Экран 02 — База знаний. Разметка и классы взяты из прототипа
 // (soro-business-console-2.html, секция kb): та же таблица, те же
@@ -213,7 +214,10 @@ function Status({ doc }: { doc: Doc }) {
 }
 
 export default function Knowledge() {
-  const [docs, setDocs] = useState<Doc[]>([]);
+  // `null` — «ещё не пришло», `[]` — «база знаний пуста». Разница видна
+  // оператору: раньше он встречал «Пока пусто. Загрузите тарифы банка» при
+  // полной базе, просто пока летел запрос.
+  const [docs, setDocs] = useState<Doc[] | null>(null);
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -222,7 +226,7 @@ export default function Knowledge() {
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
-  const { files, sites } = useMemo(() => split(docs), [docs]);
+  const { files, sites } = useMemo(() => split(docs ?? []), [docs]);
 
   const refresh = useCallback(async () => {
     try {
@@ -238,7 +242,7 @@ export default function Knowledge() {
   }, [refresh]);
 
   useEffect(() => {
-    if (!docs.some((d) => IN_PROGRESS.includes(d.status))) return;
+    if (!docs?.some((d) => IN_PROGRESS.includes(d.status))) return;
     const timer = setInterval(refresh, POLL_MS);
     return () => clearInterval(timer);
   }, [docs, refresh]);
@@ -378,11 +382,7 @@ export default function Knowledge() {
 
       {/* Ошибка загрузки должна быть видна рядом с кнопкой, а не только
           в карточке ниже: иначе отказ выглядит как «ничего не произошло». */}
-      {error && (
-        <div className="fail" style={{ marginBottom: 12 }}>
-          {error}
-        </div>
-      )}
+      {error && <Failed text={error} onRetry={refresh} />}
 
       <div className="card" style={{ marginBottom: 14 }}>
         <div className="eyebrow">Добавить источник</div>
@@ -417,10 +417,24 @@ export default function Knowledge() {
             </tr>
           </thead>
           <tbody>
-            {docs.length === 0 && (
+            {docs === null && !error && (
               <tr>
-                <td colSpan={5} style={{ color: "var(--muted2)", fontSize: "12.5px" }}>
-                  Пока пусто. Загрузите тарифы банка или дайте ссылку на сайт.
+                <td colSpan={5}>
+                  <Loading text="Читаю базу знаний…" />
+                </td>
+              </tr>
+            )}
+            {docs !== null && docs.length === 0 && (
+              <tr>
+                <td colSpan={5}>
+                  <Empty
+                    title="База знаний пуста"
+                    hint={
+                      "Загрузите тарифы банка (PDF, DOCX, XLSX) или дайте ссылку " +
+                      "на сайт — обход соберёт страницы сам. Пока здесь пусто, " +
+                      "бот на любой вопрос отвечает эскалацией."
+                    }
+                  />
                 </td>
               </tr>
             )}
