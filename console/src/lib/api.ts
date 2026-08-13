@@ -4,6 +4,49 @@
 // и смена префикса превратится в поиск по всему проекту.
 export const API_BASE = "/api";
 
+// --- выбранный банк --------------------------------------------------------
+//
+// Консоль обслуживает несколько банков, и бэкенду надо сказать, чей экран
+// открыт. Slug уходит заголовком `X-Workspace` со ВСЕХ запросов — так его
+// не нужно протаскивать в каждую функцию этого файла и не забыть ни в
+// одной. Выбор переживает перезагрузку: оператор возвращается туда, где
+// работал.
+
+const WORKSPACE_KEY = "soro_ws";
+
+export function currentWorkspace(): string | null {
+  return localStorage.getItem(WORKSPACE_KEY);
+}
+
+export function selectWorkspace(slug: string | null): void {
+  if (slug) localStorage.setItem(WORKSPACE_KEY, slug);
+  else localStorage.removeItem(WORKSPACE_KEY);
+}
+
+function workspaceHeader(): Record<string, string> {
+  const slug = currentWorkspace();
+  return slug ? { "X-Workspace": slug } : {};
+}
+
+export interface WorkspaceRow {
+  slug: string;
+  name: string;
+  documents: number;
+  conversations: number;
+  default: boolean;
+}
+
+export function listWorkspaces(): Promise<WorkspaceRow[]> {
+  return request<WorkspaceRow[]>("/workspaces");
+}
+
+export function addWorkspace(slug: string, name: string): Promise<WorkspaceRow> {
+  return request<WorkspaceRow>("/workspaces", {
+    method: "POST",
+    body: JSON.stringify({ slug, name }),
+  });
+}
+
 export class ApiError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
@@ -13,8 +56,15 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     credentials: "include",
-    headers: { "Content-Type": "application/json" },
     ...init,
+    // Заголовки идут ПОСЛЕ ...init намеренно: иначе вызов со своими
+    // заголовками (загрузка файла) затирал бы X-Workspace, и документ
+    // уехал бы в чужой банк.
+    headers: {
+      "Content-Type": "application/json",
+      ...workspaceHeader(),
+      ...(init?.headers as Record<string, string> | undefined),
+    },
   });
   if (!response.ok) {
     throw new ApiError(response.status, await response.text());
@@ -57,6 +107,7 @@ export async function uploadFile(file: File): Promise<Doc> {
   const response = await fetch(`${API_BASE}/documents`, {
     method: "POST",
     credentials: "include",
+    headers: workspaceHeader(),
     body: form,
   });
   if (!response.ok) throw new ApiError(response.status, await response.text());
@@ -246,6 +297,10 @@ export interface ConversationCard {
   hint: InboxHint[];
 }
 
+export function inboxCounters(): Promise<{ waiting: number; active: number }> {
+  return request<{ waiting: number; active: number }>("/inbox/counters");
+}
+
 export function listInbox(status: InboxStatus): Promise<InboxCard[]> {
   return request<InboxCard[]>(`/inbox?status=${status}`);
 }
@@ -311,9 +366,8 @@ export interface Analytics {
   languages: { lang: string; messages: number }[];
   top_questions: { question: string; count: number }[];
   attention: { no_answer: number };
-  // Оценка — палец вверх/вниз (CHECK в DDL), а не пять баллов, которые
-  // обещает прототип. `share` = null, пока не поставили ни одной.
-  rating: { total: number; positive: number; share: number | null };
+  // Средняя оценка по пятибалльной шкале; null, пока не поставили ни одной.
+  rating: { total: number; average: number | null };
 }
 
 export function getAnalytics(days = 7): Promise<Analytics> {
@@ -333,6 +387,7 @@ export async function deleteDocument(id: number): Promise<void> {
   const response = await fetch(`${API_BASE}/documents/${id}`, {
     method: "DELETE",
     credentials: "include",
+    headers: workspaceHeader(),
   });
   if (!response.ok) throw new ApiError(response.status, await response.text());
 }
@@ -343,7 +398,7 @@ export async function deleteDocument(id: number): Promise<void> {
 export async function deleteSite(host: string): Promise<{ deleted: number }> {
   const response = await fetch(
     `${API_BASE}/documents?host=${encodeURIComponent(host)}`,
-    { method: "DELETE", credentials: "include" },
+    { method: "DELETE", credentials: "include", headers: workspaceHeader() },
   );
   if (!response.ok) throw new ApiError(response.status, await response.text());
   return (await response.json()) as { deleted: number };

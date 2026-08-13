@@ -11,6 +11,7 @@ import {
   returnToBot,
   takeConversation,
 } from "../lib/api";
+import { useLang } from "../lib/lang";
 
 // Экран 06 «Инбокс оператора» (раздел 8.3 ТЗ).
 //
@@ -87,6 +88,7 @@ function BotMark() {
 }
 
 export default function Inbox() {
+  const { t } = useLang();
   const [queues, setQueues] = useState<Record<InboxStatus, InboxCard[]>>({
     waiting: [],
     active: [],
@@ -102,6 +104,8 @@ export default function Inbox() {
   // Через состояние он видел бы только то, что было при подписке.
   const openId = useRef<number | null>(null);
   openId.current = current;
+
+  const logRef = useRef<HTMLDivElement | null>(null);
 
   const refreshQueues = useCallback(async () => {
     try {
@@ -132,6 +136,14 @@ export default function Inbox() {
   useEffect(() => {
     if (current !== null) refreshCard(current);
   }, [current, refreshCard]);
+
+  // Лента прокручивается к последней реплике. Без этого оператор,
+  // открывший длинный диалог, видит его начало — и первое, что делает,
+  // это крутит вниз, чтобы понять, о чём вообще речь.
+  useEffect(() => {
+    const log = logRef.current;
+    if (log) log.scrollTop = log.scrollHeight;
+  }, [card]);
 
   // Живые события. Сокет односторонний: сервер толкает, мы перечитываем.
   // Перечитываем целиком, а не патчим состояние по событию: список
@@ -194,7 +206,7 @@ export default function Inbox() {
           {SECTIONS.map((section) => (
             <div key={section.status}>
               <div className="qhead">
-                {section.title} · {queues[section.status].length}
+                {t(section.title)} · {queues[section.status].length}
               </div>
               {queues[section.status].map((item) => (
                 <div
@@ -215,7 +227,7 @@ export default function Inbox() {
                 </div>
               ))}
               {queues[section.status].length === 0 && (
-                <div className="qempty">пусто</div>
+                <div className="qempty">{t("пусто")}</div>
               )}
             </div>
           ))}
@@ -224,7 +236,7 @@ export default function Inbox() {
         <div className="card">
           {card === null ? (
             <div className="qempty" style={{ padding: "40px 0" }}>
-              Выберите диалог слева
+              {t("Выберите диалог слева")}
             </div>
           ) : (
             <>
@@ -256,7 +268,7 @@ export default function Inbox() {
                     disabled={busy}
                     onClick={() => act(() => takeConversation(card.conversation_id))}
                   >
-                    Взять в работу
+                    {t("Взять в работу")}
                   </button>
                 )}
                 {!waitingForOperator && escalation !== null && (
@@ -265,7 +277,7 @@ export default function Inbox() {
                     disabled={busy}
                     onClick={() => act(() => returnToBot(card.conversation_id))}
                   >
-                    Вернуть боту
+                    {t("Вернуть боту")}
                   </button>
                 )}
                 {/* «Закрыть» отличается от «вернуть боту» тем, что
@@ -278,17 +290,23 @@ export default function Inbox() {
                     disabled={busy}
                     onClick={() => act(() => closeConversation(card.conversation_id))}
                   >
-                    Закрыть диалог
+                    {t("Закрыть диалог")}
                   </button>
                 )}
               </div>
 
-              <div className="convlog">
+              <div className="convlog" ref={logRef}>
                 {card.messages.map((message, index) => {
                   if (message.role === "user") {
                     return (
                       <div className="msg u" key={message.id}>
                         {message.text}
+                        {/* Время и канал у каждой реплики: в склеенном
+                            диалоге видно, что вот это пришло вчера из
+                            Telegram, а вот это — сегодня из виджета. */}
+                        <span className="msgmeta">
+                          {clock(message.created_at)} · {message.channel}
+                        </span>
                       </div>
                     );
                   }
@@ -317,6 +335,12 @@ export default function Inbox() {
                             {REASONS[escalation!.reason] || escalation!.reason}
                           </div>
                         )}
+                        <span className="msgmeta">
+                          {clock(message.created_at)} · {message.channel}
+                          {message.latency_ms
+                            ? ` · ${(message.latency_ms / 1000).toFixed(1)} с`
+                            : ""}
+                        </span>
                       </div>
                     </div>
                   );
@@ -366,13 +390,23 @@ export default function Inbox() {
                     placeholder="Ответ клиенту — уйдёт в тот канал, где он написал последним"
                     value={draft}
                     onChange={(event) => setDraft(event.target.value)}
+                    // Enter отправляет, Shift+Enter переносит строку — как
+                    // в любом мессенджере и как в самом виджете. Оператор
+                    // отвечает десятками, тянуться мышью к кнопке на
+                    // каждый ответ он не должен.
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        void send();
+                      }
+                    }}
                   />
                   <button
                     className="btn primary"
                     disabled={busy || !draft.trim()}
                     onClick={send}
                   >
-                    Отправить
+                    {t("Отправить")}
                   </button>
                 </div>
               </div>

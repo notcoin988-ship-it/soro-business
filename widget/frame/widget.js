@@ -175,18 +175,24 @@
     var row = document.createElement("div");
     row.className = "raterow";
 
-    [
-      { label: "👍", score: 1 },
-      { label: "👎", score: -1 },
-    ].forEach(function (option) {
+    // Пять звёзд: при наведении подсвечиваются все до текущей — так
+    // человек видит, что ставит «четыре», а не «четвёртую».
+    [1, 2, 3, 4, 5].forEach(function (score) {
       var button = document.createElement("button");
       button.type = "button";
-      button.textContent = option.label;
+      button.className = "star";
+      button.textContent = "★";
+      button.title = score + " из 5";
+      button.onmouseenter = function () {
+        Array.prototype.forEach.call(row.children, function (star, index) {
+          star.classList.toggle("lit", index < score);
+        });
+      };
       button.onclick = function () {
         // Кнопки убираем сразу: оценка ставится один раз, и второй клик
-        // по той же кнопке не должен выглядеть как «не засчиталось».
+        // по той же звезде не должен выглядеть как «не засчиталось».
         row.textContent = "";
-        box.appendChild(document.createTextNode(" Спасибо!"));
+        box.appendChild(document.createTextNode(" Спасибо, " + score + " из 5!"));
         fetch("/widget/feedback", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -194,7 +200,7 @@
             uid: uid,
             ws: ws,
             message_id: messageId,
-            score: option.score,
+            score: score,
           }),
         }).catch(function () {
           box.appendChild(document.createTextNode(" (не отправилось)"));
@@ -202,6 +208,14 @@
       };
       row.appendChild(button);
     });
+
+    // Подсветка гаснет, когда мышь ушла со всего ряда: иначе на экране
+    // остаётся «четыре звезды», которых человек не ставил.
+    row.onmouseleave = function () {
+      Array.prototype.forEach.call(row.children, function (star) {
+        star.classList.remove("lit");
+      });
+    };
 
     box.appendChild(row);
     log.appendChild(box);

@@ -2,12 +2,11 @@
 
 Оценка живёт в таблице `feedback` из раздела 5 — той самой, про которую в
 списке «не назначено никому» стоял вопрос «либо она мертва, либо кто-то
-должен её закрыть». Здесь она закрыта: палец вверх или вниз на прощальное
-сообщение оператора.
+должен её закрыть». Здесь она закрыта: пять звёзд на прощальное сообщение
+оператора.
 
-ПОЧЕМУ НЕ ПЯТЬ ЗВЁЗД, хотя прототип обещает «4,4/5»: в DDL стоит
-`CHECK (score IN (-1, 1))`. Разбор противоречия — в шапке
-`core/feedback.py`.
+ПЯТЬ ЗВЁЗД, А НЕ ПАЛЕЦ ИЗ ИСХОДНОГО DDL: так обещает прототип на экране
+07, и шкалу поменяла миграция 0003. Разбор — в шапке `core/feedback.py`.
 """
 
 from __future__ import annotations
@@ -148,14 +147,14 @@ async def test_client_rates_the_operator(client, session, workspace):
         ).json()
         response = await client.post(
             "/widget/feedback",
-            json={"uid": UID, "message_id": closed["rate_for"], "score": 1},
+            json={"uid": UID, "message_id": closed["rate_for"], "score": 5},
         )
 
     assert response.status_code == 200
     saved = await session.scalar(
         select(Feedback).where(Feedback.workspace_id == workspace.id)
     )
-    assert saved.score == 1
+    assert saved.score == 5
     assert saved.message_id == closed["rate_for"]
 
 
@@ -173,11 +172,11 @@ async def test_second_click_replaces_the_first(client, session, workspace):
         ).json()
         await client.post(
             "/widget/feedback",
-            json={"uid": UID, "message_id": closed["rate_for"], "score": 1},
+            json={"uid": UID, "message_id": closed["rate_for"], "score": 5},
         )
         await client.post(
             "/widget/feedback",
-            json={"uid": UID, "message_id": closed["rate_for"], "score": -1},
+            json={"uid": UID, "message_id": closed["rate_for"], "score": 2},
         )
 
     # Фильтр по воркспейсу обязателен: база разработки живая, и оценки в
@@ -188,12 +187,18 @@ async def test_second_click_replaces_the_first(client, session, workspace):
         )
     ).all()
     assert len(rows) == 1
-    assert rows[0].score == -1
+    assert rows[0].score == 2
 
 
-async def test_score_outside_the_check_is_rejected(client, session, workspace):
-    """Пять баллов в колонку с `CHECK (score IN (-1,1))` не положить —
-    отказываем на входе, а не ловим ошибку базы."""
+@pytest.mark.parametrize("score", [0, 6, -1, 42])
+async def test_score_outside_the_scale_is_rejected(client, session, workspace, score):
+    """Шкала — от 1 до 5, и это ограничение стоит в базе.
+
+    Отказываем на входе, а не ловим ошибку CHECK: рухнувшая транзакция
+    утащит за собой и закрытие диалога. Ноль и минус единица проверяются
+    отдельно — минус единица это старая шкала, и клиент со старой
+    вкладкой пришлёт именно её.
+    """
     conversation = await escalated_dialog(session, workspace)
 
     async with client:
@@ -202,7 +207,7 @@ async def test_score_outside_the_check_is_rejected(client, session, workspace):
         ).json()
         response = await client.post(
             "/widget/feedback",
-            json={"uid": UID, "message_id": closed["rate_for"], "score": 5},
+            json={"uid": UID, "message_id": closed["rate_for"], "score": score},
         )
 
     assert response.status_code == 422
@@ -223,7 +228,7 @@ async def test_cannot_rate_a_stranger_dialog(client, session, workspace):
         ).json()
         response = await client.post(
             "/widget/feedback",
-            json={"uid": "rate-uid-2", "message_id": closed["rate_for"], "score": 1},
+            json={"uid": "rate-uid-2", "message_id": closed["rate_for"], "score": 5},
         )
 
     assert response.status_code == 403
@@ -240,11 +245,11 @@ async def test_rating_shows_up_in_analytics(client, session, workspace):
         ).json()
         await client.post(
             "/widget/feedback",
-            json={"uid": UID, "message_id": closed["rate_for"], "score": 1},
+            json={"uid": UID, "message_id": closed["rate_for"], "score": 5},
         )
         analytics = (await client.get("/api/analytics?days=7")).json()
 
-    assert analytics["rating"] == {"total": 1, "positive": 1, "share": 100}
+    assert analytics["rating"] == {"total": 1, "average": 5.0}
 
 
 # ---------------------------------------------------------------------------
@@ -272,13 +277,15 @@ async def test_telegram_button_stores_the_rating(client, session, workspace, mon
         ).json()
 
     keyboard = telegram.rating_keyboard(closed["rate_for"])
-    data = keyboard.inline_keyboard[0][0].callback_data
+    # Пять кнопок одним рядом, последняя — «отлично».
+    assert len(keyboard.inline_keyboard[0]) == 5
+    data = keyboard.inline_keyboard[0][-1].callback_data
 
     assert await telegram.store_rating(data) is True
     saved = await session.scalar(
         select(Feedback).where(Feedback.workspace_id == workspace.id)
     )
-    assert saved.score == 1
+    assert saved.score == 5
 
 
 async def test_foreign_callback_is_ignored(session, monkeypatch):

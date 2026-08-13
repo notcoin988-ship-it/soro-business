@@ -260,7 +260,7 @@ class AuditLog(Base):
 class Feedback(Base):
     __tablename__ = "feedback"
     __table_args__ = (
-        CheckConstraint("score IN (-1, 1)", name="ck_feedback_score"),
+        CheckConstraint("score BETWEEN 1 AND 5", name="ck_feedback_score"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
