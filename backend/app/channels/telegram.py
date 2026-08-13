@@ -23,15 +23,23 @@ from __future__ import annotations
 
 import logging
 
+from contextlib import suppress
+
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.types import Message, Update
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    Update,
+)
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from app.channels import widget
 from app.config import settings
-from app.core import linking
+from app.core import feedback, linking
 from app.core.dialog import handle_incoming, resolve_identity
 from app.db import SessionLocal
 from app.models import ChannelIdentity
@@ -78,7 +86,70 @@ def get_dispatcher() -> Dispatcher:
     if _dispatcher is None:
         _dispatcher = Dispatcher()
         _dispatcher.message.register(on_message)
+        _dispatcher.callback_query.register(on_rating)
     return _dispatcher
+
+
+# --- оценка работы оператора -----------------------------------------------
+#
+# Кнопки, а не текст: попроси человека написать «5» — и это «5» уедет в
+# поиск по базе знаний как обычный вопрос. Callback приходит отдельным
+# типом апдейта и до ядра не доходит.
+
+RATE_PREFIX = "rate:"
+
+THANKS = "Раҳмат барои баҳо!\nСпасибо за оценку!"
+
+
+def rating_keyboard(message_id: int) -> InlineKeyboardMarkup:
+    """Две кнопки под прощальным сообщением."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="👍 Понравилось",
+                    callback_data=f"{RATE_PREFIX}{message_id}:{feedback.UP}",
+                ),
+                InlineKeyboardButton(
+                    text="👎 Нет",
+                    callback_data=f"{RATE_PREFIX}{message_id}:{feedback.DOWN}",
+                ),
+            ]
+        ]
+    )
+
+
+async def store_rating(data: str) -> bool:
+    """Разобрать `callback_data` и записать оценку.
+
+    Отдельно от обработчика намеренно: разбор строки и запись в базу
+    проверяются без сети, без объекта `CallbackQuery` и без живого бота.
+    """
+    if not data.startswith(RATE_PREFIX):
+        return False
+
+    try:
+        message_id, score = data[len(RATE_PREFIX) :].split(":")
+        async with SessionLocal() as session:
+            saved = await feedback.record(session, int(message_id), int(score))
+            await session.commit()
+    except Exception:  # noqa: BLE001 — кнопка не повод ронять обработчик
+        log.exception("не удалось записать оценку по callback %r", data)
+        return False
+
+    return saved is not None
+
+
+async def on_rating(query: CallbackQuery) -> None:
+    """Клиент нажал кнопку оценки."""
+    saved = await store_rating(query.data or "")
+
+    # Всплывающее уведомление вместо нового сообщения: диалог закрыт, и
+    # дописывать в него ещё одну реплику незачем.
+    await query.answer(THANKS if saved else "Не получилось, извините")
+    # Кнопки убираем — оценку ставят один раз.
+    with suppress(Exception):
+        await query.message.edit_reply_markup(reply_markup=None)
 
 
 def display_name(message: Message) -> str | None:

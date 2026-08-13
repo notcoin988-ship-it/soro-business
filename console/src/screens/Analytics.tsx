@@ -120,19 +120,33 @@ export default function Analytics() {
           <div className="substat">при среднем разговоре 4,5 мин</div>
         </div>
 
-        <div className="card">
-          <div className="eyebrow">Медиана ответа бота</div>
-          <div className="stat brass">
-            {data && data.median_latency_ms !== null
-              ? seconds(data.median_latency_ms)
-              : "—"}
+        {/* Пока оценок нет, карточка показывает медиану ответа: пустая
+            плашка «—» на месте KPI выглядит поломкой, а медиана считается
+            запросом из того же приложения Б и проверяет норматив приёмки.
+            Появилась первая оценка — карточка становится оценкой. */}
+        {data && data.rating.total > 0 ? (
+          <div className="card">
+            <div className="eyebrow">Оценка работы оператора</div>
+            <div className="stat brass">{data.rating.share}%</div>
+            <div className="substat">
+              довольных из {data.rating.total} оценок
+            </div>
           </div>
-          <div className="substat">
-            {data && data.median_latency_ms !== null
-              ? "норматив приёмки — меньше 6 секунд"
-              : "ответов за период не было"}
+        ) : (
+          <div className="card">
+            <div className="eyebrow">Медиана ответа бота</div>
+            <div className="stat brass">
+              {data && data.median_latency_ms !== null
+                ? seconds(data.median_latency_ms)
+                : "—"}
+            </div>
+            <div className="substat">
+              {data && data.median_latency_ms !== null
+                ? "норматив приёмки — меньше 6 секунд"
+                : "ответов за период не было"}
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="card">
           <div className="eyebrow">Исходы диалогов</div>

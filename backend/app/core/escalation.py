@@ -180,6 +180,30 @@ async def take(
     return escalation
 
 
+async def close(
+    session: AsyncSession, conversation: Conversation
+) -> Escalation | None:
+    """«Закрыть диалог»: разговор окончен, оба молчат.
+
+    Отличие от `resolve` ровно одно, но важное: там оператор возвращает
+    клиента боту и разговор продолжается, здесь — заканчивается. Дальше
+    клиент пишет заново, и это будет НОВЫЙ диалог: `resolve_conversation`
+    ищет незакрытый.
+
+    Закрытие — единственный момент, когда уместно просить оценку: пока
+    разговор идёт, спрашивать «как вам оператор» рано.
+    """
+    escalation = await open_escalation(session, conversation.id)
+    if escalation is not None:
+        escalation.resolved_at = datetime.now(timezone.utc)
+
+    conversation.status = "closed"
+    conversation.closed_at = datetime.now(timezone.utc)
+    await session.flush()
+    await notify("closed", {"conversation_id": conversation.id})
+    return escalation
+
+
 async def resolve(
     session: AsyncSession, conversation: Conversation
 ) -> Escalation | None:

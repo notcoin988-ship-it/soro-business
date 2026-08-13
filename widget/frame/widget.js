@@ -159,6 +159,55 @@
     bubble("operator", JSON.parse(event.data).text || "");
   });
 
+  // Диалог закрыт оператором — просим оценить его работу. Один раз и
+  // только здесь: пока разговор идёт, спрашивать «как вам оператор» рано.
+  source.addEventListener("closed", function (event) {
+    var rateFor = JSON.parse(event.data).rate_for;
+    if (!rateFor) return;
+    askRating(rateFor);
+  });
+
+  function askRating(messageId) {
+    var box = document.createElement("div");
+    box.className = "m system rate";
+    box.appendChild(document.createTextNode("Как вам работа специалиста?"));
+
+    var row = document.createElement("div");
+    row.className = "raterow";
+
+    [
+      { label: "👍", score: 1 },
+      { label: "👎", score: -1 },
+    ].forEach(function (option) {
+      var button = document.createElement("button");
+      button.type = "button";
+      button.textContent = option.label;
+      button.onclick = function () {
+        // Кнопки убираем сразу: оценка ставится один раз, и второй клик
+        // по той же кнопке не должен выглядеть как «не засчиталось».
+        row.textContent = "";
+        box.appendChild(document.createTextNode(" Спасибо!"));
+        fetch("/widget/feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            uid: uid,
+            ws: ws,
+            message_id: messageId,
+            score: option.score,
+          }),
+        }).catch(function () {
+          box.appendChild(document.createTextNode(" (не отправилось)"));
+        });
+      };
+      row.appendChild(button);
+    });
+
+    box.appendChild(row);
+    log.appendChild(box);
+    scroll(true);
+  }
+
   source.addEventListener("error", function (event) {
     // Событие error приходит и от нашего бэкенда (с данными), и от самого
     // EventSource при обрыве связи (без данных). Второе он чинит сам,

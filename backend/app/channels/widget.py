@@ -5,8 +5,9 @@
 
   POST /widget/messages    → 202 {"message_id": ...}
   GET  /widget/stream      → SSE: history, delta, final, escalated,
-                             operator_msg
+                             operator_msg, closed
   POST /widget/link-token  → {"token": ..., "url": "https://t.me/..."}
+  POST /widget/feedback    → оценка работы оператора после закрытия
 
 ИДЕНТИФИКАЦИЯ: `uid` — `crypto.randomUUID()`, который фронт кладёт в
 localStorage под ключом `soro_uid` и присылает с каждым запросом; он же
@@ -49,7 +50,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core import dialog
+from app.core import dialog, feedback
 from app.db import SessionLocal, get_session
 from app.models import Chunk, ChannelIdentity, Conversation, Document, Message
 
@@ -293,6 +294,48 @@ async def stream(uid: str, ws: str | None = None) -> StreamingResponse:
             "X-Accel-Buffering": "no",
         },
     )
+
+
+class FeedbackIn(BaseModel):
+    uid: str
+    message_id: int
+    score: int
+    ws: str | None = None
+
+
+@router.post("/feedback")
+async def rate(
+    payload: FeedbackIn, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """Оценка работы оператора после закрытия диалога.
+
+    Эндпоинт открыт наружу, поэтому оценить можно только СВОЁ сообщение:
+    иначе любой желающий испортит статистику чужого банка, зная лишь
+    порядковый номер строки в `messages`.
+    """
+    workspace = await dialog.get_workspace(session, payload.ws)
+    identity = await session.scalar(
+        select(ChannelIdentity).where(
+            ChannelIdentity.workspace_id == workspace.id,
+            ChannelIdentity.channel == CHANNEL,
+            ChannelIdentity.external_id == payload.uid,
+        )
+    )
+    if identity is None:
+        raise HTTPException(status_code=404, detail="клиент не найден")
+
+    message = await session.get(Message, payload.message_id)
+    conversation = (
+        await session.get(Conversation, message.conversation_id) if message else None
+    )
+    if conversation is None or conversation.contact_id != identity.contact_id:
+        raise HTTPException(status_code=403, detail="это не ваш диалог")
+
+    saved = await feedback.record(session, payload.message_id, payload.score)
+    if saved is None:
+        raise HTTPException(status_code=422, detail="оценка вне допустимых значений")
+    await session.commit()
+    return {"ok": True, "score": saved.score}
 
 
 @router.post("/link-token")

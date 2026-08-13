@@ -71,6 +71,14 @@ router = APIRouter(tags=["inbox"])
 # хвост. Понадобится глубже — добирается пагинацией.
 HISTORY_LIMIT = 200
 
+# Прощание при закрытии диалога. Двуязычное — как все реплики бота: язык
+# клиента здесь уже неизвестен, а спрашивать оценку на чужом языке хуже,
+# чем на двух сразу.
+GOODBYE = (
+    "Мо суҳбатро мебандем. Кори мутахассисро баҳо диҳед, лутфан.\n"
+    "Мы закрываем диалог. Оцените, пожалуйста, работу специалиста."
+)
+
 
 class ReplyIn(BaseModel):
     text: str
@@ -372,9 +380,17 @@ async def reply_to_client(
 
 
 async def _send_to_channel(
-    session: AsyncSession, conversation: Conversation, channel: str, text: str
+    session: AsyncSession,
+    conversation: Conversation,
+    channel: str,
+    text: str,
+    rate_for: int | None = None,
 ) -> None:
     """Доставка в канал клиента.
+
+    `rate_for` — id сообщения, к которому клиент может поставить оценку.
+    Он есть только у прощального сообщения при закрытии диалога; в
+    обычном ответе оператора его нет, и кнопки оценки не появляются.
 
     Каналы подключаются по мере готовности: сейчас живой только Telegram
     (раздел 7.1), виджет и WhatsApp — недели 4 и 5. Для неготового канала
@@ -397,7 +413,13 @@ async def _send_to_channel(
 
         from app.channels.widget import publish
 
-        publish(identity.external_id, "operator_msg", {"text": text})
+        publish(
+            identity.external_id,
+            "operator_msg",
+            {"text": text, "rate_for": rate_for},
+        )
+        if rate_for is not None:
+            publish(identity.external_id, "closed", {"rate_for": rate_for})
         return
 
     if channel != "telegram":
@@ -414,10 +436,18 @@ async def _send_to_channel(
         log.warning("у контакта %s нет telegram-идентичности", conversation.contact_id)
         return
 
-    from app.channels.telegram import get_bot
+    from app.channels.telegram import get_bot, rating_keyboard
 
     try:
-        await get_bot().send_message(chat_id=int(identity.external_id), text=text)
+        await get_bot().send_message(
+            chat_id=int(identity.external_id),
+            text=text,
+            # Две кнопки под прощальным сообщением. В Telegram это
+            # единственный способ спросить оценку, не заставляя человека
+            # печатать: ответ придёт callback-ом, а не текстом, и не
+            # уедет в поиск по базе знаний.
+            reply_markup=rating_keyboard(rate_for) if rate_for else None,
+        )
     except Exception as exc:  # noqa: BLE001
         # Telegram может не ответить, но ответ оператора уже в базе и на
         # экране — падать поздно, важно оставить след.
@@ -433,6 +463,64 @@ async def resolve_conversation(
     await escalation.resolve(session, conversation)
     await session.commit()
     return {"conversation_id": conversation.id, "status": conversation.status}
+
+
+@router.post("/api/conversations/{conversation_id}/close")
+async def close_conversation(
+    conversation_id: int, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """«Закрыть диалог» и попросить клиента оценить работу оператора.
+
+    ПОЧЕМУ ОЦЕНКА ЖИВЁТ ЗДЕСЬ, А НЕ В КАНАЛЕ. Спрашивать «как вам
+    оператор» имеет смысл ровно один раз и ровно в этот момент. Канал не
+    знает, когда разговор окончен, — это решает человек, нажимая кнопку.
+
+    Сообщение с просьбой сохраняем как реплику оператора, а не как
+    `system`: клиент видит его в переписке, а `system` каналы намеренно
+    не показывают.
+    """
+    conversation = await _conversation_or_404(session, conversation_id)
+    if conversation.status == "closed":
+        raise HTTPException(status_code=409, detail="диалог уже закрыт")
+
+    last_incoming = await session.scalar(
+        select(Message)
+        .where(Message.conversation_id == conversation_id, Message.role == "user")
+        .order_by(Message.id.desc())
+    )
+
+    from app.core.dialog import save_message
+
+    message = None
+    if last_incoming is not None:
+        message = await save_message(
+            session,
+            conversation=conversation,
+            channel=last_incoming.channel,
+            role="operator",
+            text=GOODBYE,
+        )
+
+    await escalation.close(session, conversation)
+    await session.commit()
+
+    if last_incoming is not None:
+        # `rate_for` — сообщение, к которому привяжется оценка. Без него
+        # клиенту некуда её поставить: в схеме feedback ссылается на
+        # `messages.id`, а не на диалог.
+        await _send_to_channel(
+            session,
+            conversation,
+            last_incoming.channel,
+            GOODBYE,
+            rate_for=message.id if message else None,
+        )
+
+    return {
+        "conversation_id": conversation.id,
+        "status": conversation.status,
+        "rate_for": message.id if message else None,
+    }
 
 
 @router.get("/api/inbox/counters")
