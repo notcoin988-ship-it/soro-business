@@ -128,6 +128,91 @@ export function getOmniLatest(): Promise<OmniLive> {
   return request<OmniLive>("/omni/latest");
 }
 
+// --- инбокс оператора (экран 06) -------------------------------------------
+
+export type InboxStatus = "waiting" | "active" | "resolved";
+
+export interface InboxCard {
+  conversation_id: number;
+  escalation_id: number;
+  reason: string;
+  created_at: string;
+  taken_by: string | null;
+  resolved_at: string | null;
+  display_name: string | null;
+  channel: string | null;
+  preview: string;
+  last_at: string | null;
+}
+
+export interface InboxMessage {
+  id: number;
+  role: "user" | "assistant" | "operator" | "system";
+  channel: string;
+  text: string;
+  created_at: string;
+  latency_ms: number | null;
+  chunks_used: number[];
+}
+
+export interface InboxHint {
+  chunk_id: number;
+  title: string;
+  page: number | null;
+  text: string;
+}
+
+export interface ConversationCard {
+  conversation_id: number;
+  status: string;
+  display_name: string | null;
+  channels: string[];
+  escalation: {
+    id: number;
+    reason: string;
+    taken_by: string | null;
+    created_at: string;
+  } | null;
+  messages: InboxMessage[];
+  hint: InboxHint[];
+}
+
+export function listInbox(status: InboxStatus): Promise<InboxCard[]> {
+  return request<InboxCard[]>(`/inbox?status=${status}`);
+}
+
+export function getConversation(id: number): Promise<ConversationCard> {
+  return request<ConversationCard>(`/conversations/${id}`);
+}
+
+export function takeConversation(id: number): Promise<{ taken_by: string }> {
+  return request<{ taken_by: string }>(`/conversations/${id}/take`, {
+    method: "POST",
+    body: JSON.stringify({ operator: "operator" }),
+  });
+}
+
+export function replyToClient(id: number, text: string): Promise<unknown> {
+  return request(`/conversations/${id}/reply`, {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+}
+
+export function returnToBot(id: number): Promise<{ status: string }> {
+  return request<{ status: string }>(`/conversations/${id}/resolve`, {
+    method: "POST",
+  });
+}
+
+// Сокет живёт вне `request`: у него нет ни заголовков, ни JSON-ответа. Но
+// адрес всё равно собирается здесь — правило «адреса бэкенда знает только
+// этот файл» действует и для ws.
+export function inboxSocket(): WebSocket {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return new WebSocket(`${protocol}//${window.location.host}/ws/inbox`);
+}
+
 // --- аналитика (экран 07) --------------------------------------------------
 
 export interface Analytics {
