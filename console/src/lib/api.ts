@@ -128,6 +128,33 @@ export function getOmniLatest(): Promise<OmniLive> {
   return request<OmniLive>("/omni/latest");
 }
 
+// --- каналы (экран 05) -----------------------------------------------------
+
+export interface ChannelCard {
+  id: "telegram" | "widget" | "whatsapp";
+  title: string;
+  // live — работает, wait — настроено наполовину, off — не подключён,
+  // unknown — не смогли спросить (Telegram не ответил).
+  state: "live" | "wait" | "off" | "unknown";
+  note: string;
+  conversations: number;
+  bot?: string;
+  link?: string | null;
+  webhook?: { url: string; pending: number; error: string | null } | null;
+  snippet?: string;
+  demo_url?: string | null;
+}
+
+export interface ChannelsInfo {
+  days: number;
+  public_base_url: string | null;
+  channels: ChannelCard[];
+}
+
+export function getChannels(): Promise<ChannelsInfo> {
+  return request<ChannelsInfo>("/channels");
+}
+
 // --- обзор (экран 01) ------------------------------------------------------
 //
 // Ряды `spark` приходят по одному числу на день и уже содержат нули за

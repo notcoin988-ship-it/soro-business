@@ -3,7 +3,26 @@
 Ни одного секрета в коде — правило 10.1: секрет в git это инцидент.
 """
 
+import re
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Заглушки в `.env`. Найдено живым прогоном: в файле стенда лежит
+# `WHATSAPP_TOKEN=ЗАПРОСИ-У-ТИМЛИДА`, и проверка «не пусто» считала канал
+# настроенным — консоль показывала галочку напротив того, чего нет.
+#
+# Правило не требует списка: настоящий токен, id и адрес не содержат
+# кириллицы и не кончаются многоточием. `.env.example` весь такой по
+# построению — «EAAG...», «123456:ABC...», «поменять-обязательно».
+_PLACEHOLDER_RE = re.compile(r"[А-Яа-яЁё]")
+
+
+def is_filled(value: str | None) -> bool:
+    """Задано ли значение по-настоящему, а не «запросить у тимлида»."""
+    value = (value or "").strip()
+    if not value or value.endswith("..."):
+        return False
+    return not _PLACEHOLDER_RE.search(value)
 
 
 class Settings(BaseSettings):

@@ -1,37 +1,122 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import { WorkspaceInfo, getWorkspace } from "../lib/api";
+import { ChannelCard, ChannelsInfo, getChannels } from "../lib/api";
 
-// Экран 05 — Каналы. Разметка из прототипа (секция ch) с двумя заменами,
-// обе от того, что стенд настоящий:
+// Экран 05 — Каналы. Разметка из прототипа (секция ch), но экран рабочий,
+// а не витринный: по нему перед встречей проверяют, что каналы живы.
 //
-// 1. QR в прототипе декоративный — псевдослучайный LCG со seed 20260731,
-//    не сканируется. Здесь настоящий, через qrcode.react (библиотека
-//    названа в ТЗ прямо, согласовывать не нужно).
-// 2. Сниппет в прототипе ссылается на cdn.sorollm.tj/w.js. Такого адреса
-//    нет: loader.js отдаёт сам бэкенд по /w.js. На демо стенд живёт за
-//    ngrok, и адрес меняется при каждом перезапуске туннеля — поэтому он
-//    приходит с сервера, а не зашит здесь. Скопированный с экрана сниппет
-//    обязан работать, иначе он хуже, чем никакого.
-const FALLBACK_BOT = "EskhataDemoBot";
+// ЧТО БЫЛО НЕ ТАК С ПРОТОТИПОМ. Там на карточках зашиты плашки «Активен»,
+// и экран остаётся зелёным ровно тогда, когда он нужнее всего: ngrok
+// сменил адрес, Telegram замолчал, а консоль об этом не знает. Теперь
+// состояние приходит с бэкенда и означает факт:
+//
+//   live    — токен есть, вебхук прописан, ошибок доставки нет;
+//   wait    — настроено наполовину: вебхук не прописан, нет адреса стенда,
+//             временный токен песочницы;
+//   off     — канала нет вовсе;
+//   unknown — не смогли спросить Telegram (нет сети).
+//
+// Ещё две замены против эталона, обе от того, что стенд настоящий: QR там
+// декоративный (псевдослучайный LCG со seed 20260731, не сканируется) —
+// здесь настоящий, через qrcode.react; сниппет ссылался на выдуманный
+// cdn.sorollm.tj — здесь он собирается на бэкенде с адресом ЭТОГО стенда,
+// потому что скопированный с экрана сниппет обязан работать.
 
-function snippet(base: string, slug: string): string {
-  return `<script src="${base}/w.js"\n  data-ws="${slug}"\n  data-lang="tg,ru"></script>`;
+const STATE_LABEL: Record<ChannelCard["state"], string> = {
+  live: "Активен",
+  wait: "Требует внимания",
+  off: "Не подключён",
+  unknown: "Состояние неизвестно",
+};
+
+const STATE_CLASS: Record<ChannelCard["state"], string> = {
+  live: "pill live",
+  wait: "pill wait",
+  // `.pill.off` в эталоне серая и без акцента — ровно то, что нужно
+  // каналу, которого нет: он не проблема, он просто не подключён.
+  off: "pill off",
+  unknown: "pill wait",
+};
+
+const BADGE: Record<string, { label: string; color: string; ink?: string }> = {
+  telegram: { label: "TG", color: "var(--tg)" },
+  widget: { label: "W", color: "var(--rose)", ink: "#fff" },
+  whatsapp: { label: "WA", color: "var(--wa)" },
+};
+
+function Head({ card }: { card: ChannelCard }) {
+  const badge = BADGE[card.id];
+  return (
+    <div className="chtop">
+      <div className="chname">
+        <span className="chico" style={{ background: badge.color, color: badge.ink }}>
+          {badge.label}
+        </span>
+        {card.title}
+      </div>
+      <span className={STATE_CLASS[card.state]}>
+        <span className="dot" />
+        {STATE_LABEL[card.state]}
+      </span>
+    </div>
+  );
+}
+
+function Note({ card, days }: { card: ChannelCard; days: number }) {
+  return (
+    <div className="chnote">
+      <div className={card.state === "live" ? "chstate" : "chstate warn"}>
+        {card.note}
+      </div>
+      <div className="substat">
+        {card.conversations} диалогов за {days} дней
+        {card.webhook && card.webhook.pending > 0
+          ? ` · в очереди Telegram ${card.webhook.pending}`
+          : ""}
+      </div>
+    </div>
+  );
 }
 
 export default function Channels() {
-  const [info, setInfo] = useState<WorkspaceInfo | null>(null);
+  const [info, setInfo] = useState<ChannelsInfo | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    getWorkspace()
-      .then(setInfo)
-      .catch(() => setInfo(null));
+  const load = useCallback(async () => {
+    setBusy(true);
+    try {
+      setInfo(await getChannels());
+      setError("");
+    } catch {
+      setError("Не удалось прочитать состояние каналов");
+    } finally {
+      setBusy(false);
+    }
   }, []);
 
-  const bot = info?.telegram_bot || FALLBACK_BOT;
-  // Пока воркспейс не приехал, показываем адрес самой консоли: она
-  // открыта с того же стенда, так что это не выдумка, а верная догадка.
-  const base = info?.public_base_url || window.location.origin;
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const find = (id: string) => info?.channels.find((item) => item.id === id);
+  const telegram = find("telegram");
+  const widget = find("widget");
+  const whatsapp = find("whatsapp");
+  const days = info?.days ?? 7;
+
+  async function copy(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // Буфер обмена закрыт политикой браузера — не беда: сниппет виден
+      // и выделяется мышью.
+      setError("Браузер не дал доступ к буферу — скопируйте вручную");
+    }
+  }
 
   return (
     <>
@@ -45,80 +130,70 @@ export default function Channels() {
             каналов ни было включено.
           </p>
         </div>
+        {/* Проверка перед встречей — главное действие этого экрана, и она
+            должна быть под рукой, а не через F5. */}
+        <button className="btn" onClick={load} disabled={busy}>
+          {busy ? "Проверяю…" : "↻  Проверить"}
+        </button>
       </div>
+
+      {error && <div className="fail">{error}</div>}
 
       <div className="grid g3">
         <div className="chcard">
-          <div className="chtop">
-            <div className="chname">
-              <span className="chico" style={{ background: "var(--tg)" }}>
-                TG
-              </span>
-              Telegram
-            </div>
-            <span className="pill live">
-              <span className="dot" />
-              Активен
-            </span>
-          </div>
+          {telegram && <Head card={telegram} />}
           <div className="chdesc">
             Отсканируйте — бот ответит по документам банка. Работает прямо на
             встрече, ставить ничего не нужно.
           </div>
           <div className="qrbox">
-            <QRCodeSVG value={`https://t.me/${bot}`} size={132} level="M" />
+            {telegram?.link ? (
+              <QRCodeSVG value={telegram.link} size={132} level="M" />
+            ) : (
+              <div className="substat">бот не подключён</div>
+            )}
           </div>
           <div
             className="mono"
             style={{ fontSize: 11, color: "var(--muted)", textAlign: "center" }}
           >
-            @{bot}
+            @{telegram?.bot ?? "—"}
           </div>
+          {telegram && <Note card={telegram} days={days} />}
         </div>
 
         <div className="chcard">
-          <div className="chtop">
-            <div className="chname">
-              <span
-                className="chico"
-                style={{ background: "var(--rose)", color: "#fff" }}
-              >
-                W
-              </span>
-              Веб-виджет
-            </div>
-            <span className="pill live">
-              <span className="dot" />
-              Активен
-            </span>
-          </div>
+          {widget && <Head card={widget} />}
           <div className="chdesc">
             Одна строка в шаблон сайта. Цвета и приветствие настраиваются под
             бренд банка.
           </div>
-          <div className="snippet">
-            {snippet(base, info?.slug || "eskhata-demo")}
+          <div className="snippet">{widget?.snippet ?? "…"}</div>
+          <div className="chactions">
+            <button
+              className="btn"
+              disabled={!widget?.snippet}
+              onClick={() => widget?.snippet && copy(widget.snippet)}
+            >
+              {copied ? "Скопировано" : "Скопировать"}
+            </button>
+            {widget?.demo_url && (
+              <a className="btn" href={widget.demo_url} target="_blank" rel="noopener">
+                Открыть демо-страницу
+              </a>
+            )}
           </div>
+          {widget && <Note card={widget} days={days} />}
         </div>
 
         <div className="chcard">
-          <div className="chtop">
-            <div className="chname">
-              <span className="chico" style={{ background: "var(--wa)" }}>
-                WA
-              </span>
-              WhatsApp
-            </div>
-            <span className="pill wait">
-              <span className="dot" />
-              Песочница Meta
-            </span>
-          </div>
+          {whatsapp && <Head card={whatsapp} />}
           <div className="chdesc">
             Работает на тестовом номере. Постоянный токен выпускается через
             System User — временный живёт 24 часа и отвалится в самый неудобный
             момент.
           </div>
+          {whatsapp && <Note card={whatsapp} days={days} />}
         </div>
       </div>
     </>
