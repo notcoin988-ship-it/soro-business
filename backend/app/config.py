@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     # --- каналы ---
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_WEBHOOK_SECRET: str = ""
+    # Имя бота без @ — из него собирается ссылка «Продолжить в Telegram»
+    # (`t.me/<имя>?start=<link_token>`). Токен бота его не содержит, а
+    # спрашивать getMe на каждую кнопку — лишний поход в сеть.
+    TELEGRAM_BOT_USERNAME: str = "EskhataDemoBot"
     WHATSAPP_TOKEN: str = ""
     WHATSAPP_PHONE_ID: str = ""
     WHATSAPP_VERIFY_TOKEN: str = ""

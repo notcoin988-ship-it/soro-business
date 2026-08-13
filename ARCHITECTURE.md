@@ -36,6 +36,7 @@ soro-business/
 │       │   ├── rag.py              заглушка гибридный поиск, RRF, порог
 │       │   ├── llm.py              заглушка промпт, стриминг Soro API
 │       │   ├── dialog.py           заглушка путь одного сообщения
+│       │   ├── linking.py          готово   склейка контактов, раздел 5.1
 │       │   └── escalation.py       заглушка передача оператору
 │       │
 │       ├── ingest/                 КОНВЕЙЕР — документ → фрагменты
@@ -46,7 +47,7 @@ soro-business/
 │       │
 │       ├── channels/               ТРАНСПОРТ — только приём и отдача
 │       │   ├── telegram.py         заглушка aiogram webhook
-│       │   ├── widget.py           заглушка SSE + link_token
+│       │   ├── widget.py           частично link_token готов, SSE нет
 │       │   └── whatsapp.py         заглушка Meta Cloud API
 │       │
 │       ├── api/
