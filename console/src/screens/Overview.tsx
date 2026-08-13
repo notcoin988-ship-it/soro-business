@@ -1,14 +1,25 @@
 import { useEffect, useState } from "react";
-import { Security, getWorkspace, setSecurity } from "../lib/api";
+import {
+  OverviewData,
+  Security,
+  getOverview,
+  getWorkspace,
+  setSecurity,
+} from "../lib/api";
 import Confirm, { ConfirmRequest } from "../components/Confirm";
 
 // Экран 01 «Обзор».
 //
 // Разметка и классы — из эталона (soro-business-console-2.html, секция ov):
-// .grid.g4 с KPI, «Готовность к пилоту», «Контур безопасности». Живым
-// сделан только последний блок: четыре переключателя действительно
-// управляют поведением бота. Цифры KPI и чек-лист пока статика прототипа —
-// под них нужен GET /api/overview, это отдельная задача.
+// .grid.g4 с KPI, «Готовность к пилоту», «Контур безопасности». Живое
+// здесь всё: KPI и чек-лист приходят из `GET /api/overview`, переключатели
+// пишут в `workspaces.settings`.
+//
+// ЧТО БЫЛО РАНЬШЕ И ПОЧЕМУ ЭТО ЧИНИЛОСЬ: цифры KPI и чек-лист стояли
+// статикой прототипа — 1 342 диалога, 61%, галочки напротив всех каналов.
+// Это первый экран, который видит правление банка; нарисованное число на
+// нём становится обещанием, а галочка напротив неподключённого WhatsApp —
+// обещанием того, чего нет вовсе.
 //
 // В эталоне переключатель — это `div.sw`, у которого клик просто дёргает
 // класс `on` и никуда не сохраняется. Здесь состояние живёт в
@@ -62,8 +73,15 @@ const CONSEQUENCE: Record<string, string> = {
     "и попадут в логи её провайдера.",
 };
 
+// Секунды с одним знаком: миллисекунды на этом экране никому не нужны, а
+// «6 секунд» из норматива приёмки — как раз та точность, о которой спорят.
+function seconds(ms: number): string {
+  return `${(ms / 1000).toFixed(1).replace(".", ",")} с`;
+}
+
 export default function Overview() {
   const [security, setState] = useState<Security | null>(null);
+  const [overview, setOverview] = useState<OverviewData | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
@@ -72,6 +90,9 @@ export default function Overview() {
     getWorkspace()
       .then((info) => setState(info.security))
       .catch(() => setError("Не удалось прочитать настройки воркспейса"));
+    getOverview()
+      .then(setOverview)
+      .catch(() => setError("Не удалось прочитать состояние стенда"));
   }, []);
 
   async function save(key: keyof Security, value: boolean) {
@@ -120,48 +141,82 @@ export default function Overview() {
         </div>
       </div>
 
-      {/* KPI и чек-лист — разметка эталона, данные пока статические:
-          под них нужен GET /api/overview (приложение А), это отдельная
-          задача. Оставлены как есть, чтобы экран не «поехал». */}
       <div className="grid g4">
         <Kpi
-          label="Диалогов за 7 дней"
-          value="1 342"
-          sub="Telegram · веб · WhatsApp"
-        />
+          label={`Диалогов за ${overview?.days ?? 7} дней`}
+          value={overview ? String(overview.conversations.total) : "…"}
+          sub={
+            overview?.conversations.channels.length
+              ? overview.conversations.channels.join(" · ")
+              : "за период писем не было"
+          }
+        >
+          <Spark points={overview?.conversations.spark ?? []} color="#E8506B" fill />
+        </Kpi>
+
         <Kpi
           label="Закрыто без оператора"
-          value="61%"
-          sub="819 из 1 342 диалогов"
+          value={overview ? `${overview.conversations.bot_share}%` : "…"}
+          sub={
+            overview
+              ? `${overview.conversations.by_bot} из ${overview.conversations.total} диалогов`
+              : "считаю по базе"
+          }
           tone="rose"
-        />
-        <Kpi label="Медиана ответа" value="2,4 с" sub="95-й перцентиль — 4,1 с" />
+        >
+          <Spark
+            points={overview?.conversations.spark_bot_share ?? []}
+            color="#E8506B"
+          />
+        </Kpi>
+
+        <Kpi
+          label="Медиана ответа"
+          value={
+            overview?.latency.median_ms != null
+              ? seconds(overview.latency.median_ms)
+              : "—"
+          }
+          sub={
+            overview?.latency.p95_ms != null
+              ? `95-й перцентиль — ${seconds(overview.latency.p95_ms)}`
+              : "ответов за период не было"
+          }
+        >
+          <Spark points={overview?.latency.spark ?? []} color="#DCA84C" />
+        </Kpi>
+
         <Kpi
           label="Ответы со ссылкой на источник"
-          value="97%"
-          sub="остальные — эскалация оператору"
+          value={overview ? `${overview.citations.share}%` : "…"}
+          sub={
+            overview
+              ? `${overview.citations.cited} из ${overview.citations.answers} ответов`
+              : "остальные — эскалация оператору"
+          }
           tone="brass"
-        />
+        >
+          <Spark points={overview?.citations.spark ?? []} color="#DCA84C" />
+        </Kpi>
       </div>
 
       <h3 className="sec">Готовность к пилоту</h3>
       <div className="grid g2">
         <div className="card">
-          <Check done title="Документы загружены" hint="4 источника, 1 248 фрагментов" />
-          <Check
-            done
-            title="Telegram-бот подключён"
-            hint="@EskhataDemoBot, отвечает на тадж. и рус."
-          />
-          <Check done title="Веб-виджет выдан" hint="скрипт для вставки на eskhata.tj" />
-          <Check
-            title="WhatsApp Business API"
-            hint="работает песочница; боевой номер — после верификации Meta, 5–10 рабочих дней"
-          />
-          <Check
-            title="Передача в колл-центр"
-            hint="интеграция с вашей CRM — обсуждается на этапе пилота"
-          />
+          {/* Чек-лист считается на бэкенде: галочка напротив
+              неподключённого канала — худшее, что может быть на первом
+              экране, который смотрит правление банка. */}
+          {(overview?.readiness ?? []).map((item) => (
+            <Check
+              key={item.title}
+              done={item.done}
+              title={item.title}
+              hint={item.hint}
+            />
+          ))}
+          {overview === null && (
+            <div className="substat">читаю состояние стенда…</div>
+          )}
         </div>
 
         <div className="card">
@@ -212,22 +267,76 @@ export default function Overview() {
   );
 }
 
+// Спарклайн строится из ряда чисел по дням. Ряд обязан приходить с
+// нулями за дни без диалогов — иначе провал в переписке превратится в
+// ровный участок, и линия соврёт. За это отвечает generate_series в
+// `api/overview.py`.
+function Spark({
+  points,
+  color,
+  fill,
+}: {
+  points: number[];
+  color: string;
+  fill?: boolean;
+}) {
+  if (points.length < 2) return null;
+
+  // Верх и низ считаем по самому ряду: у процентов и миллисекунд разные
+  // масштабы, и общей шкалы для них нет.
+  const top = Math.max(...points);
+  const bottom = Math.min(...points);
+  const span = top - bottom || 1;
+  const step = 160 / (points.length - 1);
+  // 4 и 26 вместо 0 и 30 — чтобы линия не липла к краям карточки.
+  const line = points
+    .map((value, index) => {
+      const y = 26 - ((value - bottom) / span) * 22;
+      return `${Math.round(index * step)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+
+  return (
+    <svg
+      className="spark"
+      width="100%"
+      height="30"
+      viewBox="0 0 160 30"
+      preserveAspectRatio="none"
+    >
+      <polyline
+        points={line}
+        fill="none"
+        stroke={color}
+        strokeWidth="1.6"
+        opacity=".8"
+      />
+      {fill && (
+        <polyline points={`${line} 160,30 0,30`} fill="rgba(232,80,107,.09)" stroke="none" />
+      )}
+    </svg>
+  );
+}
+
 function Kpi({
   label,
   value,
   sub,
   tone,
+  children,
 }: {
   label: string;
   value: string;
   sub: string;
   tone?: "rose" | "brass";
+  children?: React.ReactNode;
 }) {
   return (
     <div className="card">
       <div className="eyebrow">{label}</div>
       <div className={`stat${tone ? ` ${tone}` : ""}`}>{value}</div>
       <div className="substat">{sub}</div>
+      {children}
     </div>
   );
 }
