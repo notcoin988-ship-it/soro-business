@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { ChannelCard, ChannelsInfo, getChannels } from "../lib/api";
+import { useLang } from "../lib/lang";
 
 // Экран 05 — Каналы. Разметка из прототипа (секция ch), но экран рабочий,
 // а не витринный: по нему перед встречей проверяют, что каналы живы.
@@ -45,6 +46,7 @@ const BADGE: Record<string, { label: string; color: string; ink?: string }> = {
 };
 
 function Head({ card }: { card: ChannelCard }) {
+  const { t } = useLang();
   const badge = BADGE[card.id];
   return (
     <div className="chtop">
@@ -56,7 +58,7 @@ function Head({ card }: { card: ChannelCard }) {
       </div>
       <span className={STATE_CLASS[card.state]}>
         <span className="dot" />
-        {STATE_LABEL[card.state]}
+        {t(STATE_LABEL[card.state])}
       </span>
     </div>
   );
@@ -79,6 +81,7 @@ function Note({ card, days }: { card: ChannelCard; days: number }) {
 }
 
 export default function Channels() {
+  const { t } = useLang();
   const [info, setInfo] = useState<ChannelsInfo | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -133,7 +136,7 @@ export default function Channels() {
         {/* Проверка перед встречей — главное действие этого экрана, и она
             должна быть под рукой, а не через F5. */}
         <button className="btn" onClick={load} disabled={busy}>
-          {busy ? "Проверяю…" : "↻  Проверить"}
+          {busy ? t("Проверяю…") : "↻  " + t("Проверить")}
         </button>
       </div>
 
@@ -175,11 +178,11 @@ export default function Channels() {
               disabled={!widget?.snippet}
               onClick={() => widget?.snippet && copy(widget.snippet)}
             >
-              {copied ? "Скопировано" : "Скопировать"}
+              {copied ? t("Скопировано") : t("Скопировать")}
             </button>
             {widget?.site_url && (
               <a className="btn" href={widget.site_url} target="_blank" rel="noopener">
-                Показать на сайте
+                {t("Показать на сайте")}
               </a>
             )}
           </div>

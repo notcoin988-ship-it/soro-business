@@ -3,6 +3,45 @@
    Здесь — только то, чего в статичном прототипе быть не могло: поля
    загрузки файлов, сообщения об ошибках, живые состояния экранов. */
 
+/* Бейдж «ждут оператора» в меню. Эскалация случается, пока оператор
+   смотрит другой экран, и узнать о ней он должен до того, как откроет
+   инбокс, а не после. */
+.navbadge {
+  margin-left: auto; min-width: 18px; padding: 1px 6px;
+  border-radius: 99px; background: var(--rose); color: #fff;
+  font-size: 10.5px; font-weight: 600; text-align: center;
+}
+
+/* --- выбор банка в шапке --- */
+
+/* В эталоне кнопка воркспейса нарисована: банк один и зашит в разметку.
+   Здесь под ней список банков стенда и форма «Добавить банк». */
+.wspick { position: relative; }
+.wsmenu {
+  position: absolute; top: calc(100% + 8px); left: 0; z-index: 40;
+  width: 268px; padding: 6px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 13px; box-shadow: 0 18px 44px rgba(0, 0, 0, .5);
+}
+.wsrow {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  background: none; border: 0; border-radius: 9px; padding: 9px 11px;
+  color: var(--paper); font: inherit;
+}
+.wsrow:hover { background: var(--panel2); }
+.wsrow.on { background: var(--raise); }
+.wsrow b { display: block; font-size: 12.5px; font-weight: 600; }
+.wsrow small {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10.5px; color: var(--muted2);
+}
+.wsrow.add { color: var(--rose-hi); font-size: 12.5px; }
+.wsadd { display: flex; flex-direction: column; gap: 7px; padding: 9px 11px; }
+.wsactions { display: flex; gap: 7px; }
+.wsempty {
+  padding: 9px 11px; font-size: 11.5px; color: var(--muted2);
+}
+
 /* --- экран 05: состояние каналов --- */
 
 /* В эталоне карточка канала заканчивается описанием: там всё всегда
@@ -43,6 +82,16 @@
 .convlog::-webkit-scrollbar { width: 5px; }
 .convlog::-webkit-scrollbar-thumb { background: var(--line); border-radius: 9px; }
 .convfoot { border-top: 1px solid var(--line-soft); padding-top: 14px; }
+
+/* Время, канал и латентность у реплики. В эталоне их нет: там переписка
+   нарисована и вся «сегодняшняя». В живом склеенном диалоге видно, что
+   одна реплика пришла вчера из Telegram, а следующая — сегодня из
+   виджета, и без этого оператор читает не тот разговор, что был. */
+.msgmeta {
+  display: block; margin-top: 6px;
+  font-size: 10px; color: var(--muted2); letter-spacing: .02em;
+}
+.msg.u .msgmeta { color: rgba(255, 255, 255, .65); text-align: right; }
 
 /* Подпись оператора в ленте: в эталоне таких реплик нет — там переписка
    обрывается на эскалации, — но в живом диалоге они есть, и отличать их
