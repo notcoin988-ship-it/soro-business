@@ -277,6 +277,27 @@ async def test_latency_is_recorded(session, workspace):
     assert answer.latency_ms == reply.latency_ms
 
 
+async def test_conversation_marks_itself_fresh(session, workspace):
+    """`last_msg_at` двигается на каждом сообщении.
+
+    Найдено живым прогоном: в базе лежал диалог с отметкой недельной
+    давности, в котором только что переписывались. По этой колонке трое
+    выбирают «последний незакрытый диалог» — ядро, склейка контактов и
+    история виджета, — и у контакта с двумя открытыми диалогами (а два их
+    становится ровно после склейки) последним оказался бы не тот.
+    """
+    await send(session, "Салом")
+    conversation = await session.scalar(
+        select(Conversation).where(Conversation.workspace_id == workspace.id)
+    )
+    started = conversation.last_msg_at
+
+    await send(session, "Раҳмат")
+    await session.refresh(conversation)
+
+    assert conversation.last_msg_at > started
+
+
 async def test_unknown_workspace_is_an_error(session):
     """Молча отвечать от имени несуществующего банка нельзя."""
     with pytest.raises(LookupError):

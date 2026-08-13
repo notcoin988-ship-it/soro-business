@@ -26,6 +26,7 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 import httpx
 from sqlalchemy import select
@@ -239,6 +240,13 @@ async def save_message(
         chunks_used=chunks_used or [],
     )
     session.add(message)
+    # Отметка о свежести диалога. Её ставит сервер при создании, но дальше
+    # она не двигалась ни разу, хотя по ней сортируют три места: выбор
+    # открытого диалога в `resolve_conversation`, склейка контактов и
+    # история виджета. Пока диалог у контакта один, промах незаметен;
+    # второй появляется ровно после склейки — то есть в сценарии демо, —
+    # и «последним» окажется тот, в котором давно не писали.
+    conversation.last_msg_at = datetime.now(tz=timezone.utc)
     await session.flush()
     return message
 
