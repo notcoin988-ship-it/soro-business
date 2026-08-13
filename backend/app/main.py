@@ -58,14 +58,21 @@ app.include_router(widget.router)
 # там корень проекта — это `backend/`, смонтированный как `/code`, и
 # `widget/` подмонтирован рядом (`/code/widget`). На хосте — на уровень
 # выше, в корне репозитория. Один путь на оба случая не подобрать.
+#
+# ИЩЕМ ПО СОДЕРЖИМОМУ, А НЕ ПО НАЛИЧИЮ КАТАЛОГА. Первая версия брала
+# первый существующий путь — и сломалась, как только бэкенд запустили в
+# контейнере: маунт `./widget:/code/widget` вложен в маунт `./backend:/code`,
+# и Docker создал на хосте ПУСТОЙ `backend/widget` как точку монтирования.
+# После этого хостовые запуски (тесты, uvicorn) выбирали пустой каталог и
+# падали на StaticFiles — все 600 тестов не собирались.
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 WIDGET_DIR = next(
     (
         candidate
         for candidate in (_BACKEND_DIR / "widget", _BACKEND_DIR.parent / "widget")
-        if candidate.is_dir()
+        if (candidate / "loader.js").is_file()
     ),
-    _BACKEND_DIR / "widget",
+    _BACKEND_DIR.parent / "widget",
 )
 
 if WIDGET_DIR.is_dir():
