@@ -12,6 +12,7 @@ import {
   takeConversation,
 } from "../lib/api";
 import { useLang } from "../lib/lang";
+import { Empty, Failed } from "../components/State";
 
 // Экран 06 «Инбокс оператора» (раздел 8.3 ТЗ).
 //
@@ -199,7 +200,7 @@ export default function Inbox() {
         </div>
       </div>
 
-      {error && <div className="fail">{error}</div>}
+      {error && <Failed text={error} onRetry={refreshQueues} />}
 
       <div className="inbox">
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
@@ -235,9 +236,21 @@ export default function Inbox() {
 
         <div className="card">
           {card === null ? (
-            <div className="qempty" style={{ padding: "40px 0" }}>
-              {t("Выберите диалог слева")}
-            </div>
+            // Пусто в очереди и «диалог не выбран» — разные вещи, и
+            // подсказка должна отличаться: в первом случае оператору
+            // делать нечего, во втором надо кликнуть слева.
+            queues.waiting.length + queues.active.length === 0 ? (
+              <Empty
+                title="Оператор не нужен"
+                hint={
+                  "Бот справляется сам: ни один диалог не ждёт человека. " +
+                  "Карточка появится здесь, как только бот сдастся или клиент " +
+                  "попросит специалиста."
+                }
+              />
+            ) : (
+              <Empty title={t("Выберите диалог слева")} />
+            )
           ) : (
             <>
               <div className="convhead">

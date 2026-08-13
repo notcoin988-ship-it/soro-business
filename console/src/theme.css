@@ -12,6 +12,25 @@
   font-size: 10.5px; font-weight: 600; text-align: center;
 }
 
+/* --- состояния экранов: читаю / пусто / сломалось --- */
+
+/* В прототипе таких состояний нет: там всё нарисовано и всегда полное.
+   Вид общий для всех семи экранов — иначе «пусто» на каждом выглядит
+   по-своему, и оператор каждый раз заново решает, поломка это или нет. */
+.state {
+  display: flex; flex-direction: column; align-items: center; gap: 7px;
+  padding: 26px 18px; text-align: center;
+  font-size: 12.5px; color: var(--muted);
+}
+.state b { font-size: 13.5px; color: var(--paper); font-weight: 600; }
+.state span { max-width: 380px; line-height: 1.6; }
+.state.loading { color: var(--muted2); }
+.state.failed { color: var(--rose-hi); }
+.state.failed .btn { margin-top: 4px; }
+
+/* Внутри таблицы состояние живёт в ячейке — отступы там свои. */
+td > .state { padding: 16px 0; }
+
 /* --- выбор банка в шапке --- */
 
 /* В эталоне кнопка воркспейса нарисована: банк один и зашит в разметку.

@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Analytics as Data, getAnalytics } from "../lib/api";
+import { Failed } from "../components/State";
 
 // Экран 07 «Аналитика».
 //
@@ -10,12 +11,11 @@ import { Analytics as Data, getAnalytics } from "../lib/api";
 // ТРИ ОТСТУПЛЕНИЯ ОТ ПРОТОТИПА, все по одной причине: экран показывают
 // правлению банка, и нарисованное число там становится обещанием.
 //
-// 1. Карточка «Оценка ответов 4,4/5 по 380 оценкам» заменена медианой
-//    ответа бота. Оценок в базе нет ни одной: таблица `feedback` есть в
-//    схеме, но эндпоинта для неё нет ни в приложении А, ни в коде, и UI
-//    для оценки тоже нигде не нарисован. Показывать 4,4/5 значит выдумать
-//    отзывы клиентов. Медиана же считается запросом из того же приложения
-//    Б и проверяет норматив «ответ < 6 сек» из раздела 3.
+// 1. Карточка «Оценка ответов» показывает настоящую среднюю по пяти
+//    баллам — их ставят клиенты после закрытия диалога. Пока оценок нет
+//    ни одной, на её месте медиана ответа бота: пустая плашка «—» на
+//    месте KPI выглядит поломкой, а медиана считается запросом из того же
+//    приложения Б и проверяет норматив «ответ < 6 сек» из раздела 3.
 // 2. В донате два сегмента вместо трёх. Третий в прототипе — «ушли · 11%»,
 //    но признака «клиент ушёл» в схеме нет: диалог либо закрыт ботом, либо
 //    дошёл до оператора. Считать «ушедших» не из чего.
@@ -72,11 +72,16 @@ export default function Analytics() {
   const [data, setData] = useState<Data | null>(null);
   const [error, setError] = useState("");
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setError("");
     getAnalytics(7)
       .then(setData)
       .catch(() => setError("Не удалось получить цифры с бэкенда"));
   }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   const totalChannels =
     data?.channels.reduce((sum, row) => sum + row.conversations, 0) || 0;
@@ -99,7 +104,7 @@ export default function Analytics() {
         </div>
       </div>
 
-      {error && <div className="fail">{error}</div>}
+      {error && <Failed text={error} onRetry={load} />}
 
       <div className="grid g4">
         <div className="card">
