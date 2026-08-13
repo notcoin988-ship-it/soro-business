@@ -118,11 +118,43 @@
     messages.forEach(function (message) {
       bubble(message.role === "user" ? "user" : message.role === "operator" ? "operator" : "bot", message.text);
     });
-    if (!messages.length) {
-      bubble("system", "Салом! Саволатонро нависед — задайте вопрос.");
-    }
+    if (!messages.length) showEmpty();
     scroll(true);
   });
+
+  // Пустое состояние вместо пустой ленты. Человек, открывший виджет
+  // впервые, не знает, что у бота спрашивать, — и чаще всего закрывает
+  // его, не написав ничего. Две подсказки-кнопки снимают этот вопрос;
+  // текст у них короткий, потому что это пример, а не сценарий.
+  function showEmpty() {
+    var box = document.createElement("div");
+    box.className = "empty";
+
+    var title = document.createElement("h2");
+    title.textContent = "Салом! Чем помочь?";
+    var hint = document.createElement("p");
+    hint.textContent =
+      "Отвечаю по документам банка на таджикском и русском. " +
+      "Если вопрос про ваш счёт — соединю со специалистом.";
+    box.appendChild(title);
+    box.appendChild(hint);
+
+    var asks = document.createElement("div");
+    asks.className = "asks";
+    ["Мӯҳлати пасандози мӯҳлатнок чанд рӯз аст?", "Что такое кредит «Многоцелевой»?"]
+      .forEach(function (question) {
+        var button = document.createElement("button");
+        button.type = "button";
+        button.textContent = question;
+        button.onclick = function () {
+          input.value = question;
+          ask();
+        };
+        asks.appendChild(button);
+      });
+    box.appendChild(asks);
+    log.appendChild(box);
+  }
 
   source.addEventListener("delta", function (event) {
     hideTyping();
@@ -237,6 +269,10 @@
   function ask() {
     var text = input.value.trim();
     if (!text) return;
+
+    // Пустое состояние с подсказками уступает место разговору.
+    var empty = log.querySelector(".empty");
+    if (empty) log.removeChild(empty);
 
     bubble("user", text);
     input.value = "";

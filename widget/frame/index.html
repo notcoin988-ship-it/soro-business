@@ -128,6 +128,42 @@
     color: var(--muted); font: inherit; font-size: 11.5px;
   }
   .tg:hover { border-color: #2AABEE; color: var(--paper); }
+
+  /* Пустое состояние: виджет открыли и молчат. Показать пустую ленту —
+     значит заставить человека гадать, что сюда писать; отсюда две
+     подсказки-вопроса, которые он может нажать вместо набора текста. */
+  .empty { margin: auto; padding: 22px 18px; text-align: center; }
+  .empty h2 {
+    font-size: 14px; font-weight: 600; margin: 0 0 6px;
+  }
+  .empty p { font-size: 12px; color: var(--muted); margin: 0 0 14px; line-height: 1.6; }
+  .asks { display: flex; flex-direction: column; gap: 7px; }
+  .asks button {
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 10px;
+    color: var(--paper); font: inherit; font-size: 12px; text-align: left;
+    padding: 9px 12px; cursor: pointer;
+  }
+  .asks button:hover { border-color: var(--rose-dim); }
+
+  /* МОБИЛЬНАЯ ВЁРСТКА. На телефоне окно занимает экран целиком (это
+     решает loader.js), а внутри меняется немногое: крупнее шрифт ввода и
+     плотнее отступы.
+
+     16px у textarea — не вкусовщина: iOS Safari масштабирует страницу
+     при фокусе на поле со шрифтом меньше 16px, и виджет «прыгает» в
+     момент, когда человек собрался печатать. */
+  @media (max-width: 560px) {
+    body { font-size: 14px; }
+    header { padding: 14px 14px calc(14px + env(safe-area-inset-top)); }
+    #log { padding: 12px; gap: 9px; }
+    .m { max-width: 92%; }
+    footer {
+      padding: 10px 12px calc(12px + env(safe-area-inset-bottom));
+    }
+    textarea { font-size: 16px; min-height: 42px; }
+    .send { width: 42px; height: 42px; flex: 0 0 42px; }
+    .x { font-size: 26px; padding: 4px 10px; }
+  }
 </style>
 </head>
 <body>
