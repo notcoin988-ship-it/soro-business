@@ -3,6 +3,38 @@
    Здесь — только то, чего в статичном прототипе быть не могло: поля
    загрузки файлов, сообщения об ошибках, живые состояния экранов. */
 
+/* --- экран 04: переключатель «сценарий / живой диалог» --- */
+
+/* В прототипе экран 04 умеет одно: проиграть нарисованный сценарий.
+   Переключатель повторяет вид языкового тумблера из шапки эталона —
+   заводить вторую форму для той же роли незачем. */
+.modetog {
+  display: inline-flex; border: 1px solid var(--line); border-radius: 99px;
+  overflow: hidden; background: var(--panel2);
+}
+.modetog button {
+  background: none; border: 0; color: var(--muted); cursor: pointer;
+  font: inherit; font-size: 11.5px; padding: 6px 13px;
+  transition: background .13s, color .13s;
+}
+.modetog button:hover { color: var(--paper); }
+.modetog button.on { background: var(--rose); color: #fff; }
+
+/* Полоса идентичностей: два внешних id и один человек. Единственное
+   место в демо, где склейку контактов видно глазами. */
+.omniids {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin: -6px 0 14px;
+}
+.idwho { font-size: 12px; font-weight: 600; }
+.idchip {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10.5px; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 99px;
+  background: var(--panel); padding: 3px 9px;
+}
+.idchip b { color: var(--rose-hi); font-weight: 500; }
+
 /* --- формы добавления источников на экране 02 --- */
 .text {
   background: var(--panel2); border: 1px solid var(--line); border-radius: 9px;

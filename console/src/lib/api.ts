@@ -92,6 +92,38 @@ export function getWorkspace(): Promise<WorkspaceInfo> {
   return request<WorkspaceInfo>("/workspace");
 }
 
+// --- живой омниканальный диалог (экран 04) ---------------------------------
+//
+// Экран 04 по ТЗ презентационный, и сценарий на нём остаётся. Но рядом со
+// сценарием он показывает диалог, который действительно случился: те же
+// три устройства, только сообщения настоящие.
+
+export interface OmniMessage {
+  channel: string;
+  role: "user" | "assistant" | "operator";
+  text: string;
+  created_at: string;
+}
+
+export interface OmniIdentity {
+  channel: string;
+  external_id: string;
+}
+
+export interface OmniLive {
+  empty: boolean;
+  conversation_id?: number;
+  status?: string;
+  contact?: { id: number | null; display_name: string | null };
+  identities: OmniIdentity[];
+  channels: string[];
+  messages: OmniMessage[];
+}
+
+export function getOmniLatest(): Promise<OmniLive> {
+  return request<OmniLive>("/omni/latest");
+}
+
 export function setSecurity(
   changes: Partial<Omit<Security, "kb_only">>,
 ): Promise<{ security: Security }> {

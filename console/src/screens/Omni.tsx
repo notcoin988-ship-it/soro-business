@@ -1,4 +1,5 @@
-import { ReactNode, useEffect, useRef, useState } from "react";
+import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { OmniLive, getOmniLatest } from "../lib/api";
 
 // Экран 04 «Омниканальность».
 //
@@ -25,7 +26,12 @@ interface Beat {
   // Классы `.dm` из эталона: u — клиент, a — бот, `a warn` — бот с
   // предупреждением, sys — системное, op — оператор.
   cls: string;
-  html: string;
+  // Реплика сценария: размеченный текст из эталона, вставляется как есть.
+  html?: string;
+  // Реплика живого диалога: обычный текст. Разделены намеренно — то, что
+  // написал человек и ответила модель, разметкой быть не может. На экране
+  // 03 по той же причине ответ разбирается вручную.
+  text?: string;
   // Зажигает пункт чек-листа внизу экрана.
   step?: number;
   // Будит устройство: чистит его лог и переносит на него подсветку.
@@ -134,6 +140,19 @@ const GAP_MESSAGE = 1500;
 // мигает раньше, чем человек дочитал финал.
 const BUTTON_DELAY = 300;
 
+type Mode = "scenario" | "live";
+
+// В живом диалоге реплики длиннее сценарных и их бывает вдвое больше:
+// сорок штук по полторы секунды — это минута, за которую зал успевает
+// заскучать. Тайминги эталона обязаны совпадать только у сценария, его
+// с прототипом и сравнивают.
+const GAP_LIVE = 850;
+
+function gap(beat: Beat, mode: Mode): number {
+  if (mode === "live") return GAP_LIVE;
+  return beat.cls === "sys" ? GAP_SYS : GAP_MESSAGE;
+}
+
 const DEVICES: { id: Dev; icon: string; color: string; title: string; where: string }[] =
   [
     {
@@ -203,6 +222,102 @@ const EMPTY: Record<Dev, ReactNode> = {
   ),
 };
 
+// --- живой диалог ----------------------------------------------------------
+//
+// Тот же экран, те же три устройства — но реплики из базы. Сценарий
+// обещает омниканальность, живой режим её предъявляет: видно, что
+// telegram-id и uuid виджета это один человек и один разговор.
+
+function toBeats(data: OmniLive): Beat[] {
+  const beats: Beat[] = [];
+  const woken = new Set<Dev>(["Tg"]);
+
+  data.messages.forEach((message) => {
+    // Каналов в этой версии два; WhatsApp появится — добавится третий
+    // корпус, а раскладка останется той же.
+    const dev: Dev = message.channel === "telegram" ? "Tg" : "Web";
+
+    if (message.role === "operator") {
+      // Ответ оператора виден дважды: у него самого и в канале клиента —
+      // ровно как в сценарии, шаги 13 и 14.
+      beats.push({
+        dev: "Op",
+        cls: "op",
+        text: message.text,
+        step: 4,
+        wake: woken.has("Op") ? undefined : "Op",
+      });
+      woken.add("Op");
+      beats.push({ dev, cls: "op", text: message.text });
+      return;
+    }
+
+    beats.push({
+      dev,
+      cls: message.role === "user" ? "u" : "a",
+      text: message.text,
+      step: dev === "Tg" ? 1 : 2,
+      wake: woken.has(dev) ? undefined : dev,
+    });
+    woken.add(dev);
+  });
+
+  // Шаг 03 — передача оператору. Зажигаем его на последней реплике бота
+  // перед первым ответом оператора: именно там бот и сдался. Если
+  // оператора в разговоре не было, шаг честно остаётся тусклым — экран
+  // показывает, что случилось, а не что должно было случиться.
+  const handover = beats.findIndex((beat) => beat.cls === "op");
+  const boundary = handover === -1 ? beats.length : handover;
+  for (let index = boundary - 1; index >= 0; index--) {
+    if (beats[index].cls === "a") {
+      if (handover !== -1 || data.status === "operator") beats[index].step = 3;
+      break;
+    }
+  }
+
+  return beats;
+}
+
+function shortId(value: string): string {
+  return value.length > 12 ? value.slice(0, 8) + "…" : value;
+}
+
+const CHANNEL_NAMES: Record<string, string> = {
+  telegram: "Telegram",
+  widget: "виджет",
+  whatsapp: "WhatsApp",
+};
+
+function LiveNote({ data, failed }: { data: OmniLive | null; failed: boolean }) {
+  if (failed) return <>Бэкенд не ответил — живой диалог не загрузился</>;
+  if (data === null) return <>Читаю из базы…</>;
+  if (data.empty) {
+    return (
+      <>
+        Живого диалога ещё нет. Напишите боту в Telegram и продолжите в виджете —
+        разговор появится здесь.
+      </>
+    );
+  }
+
+  const channels = data.channels
+    .map((channel) => CHANNEL_NAMES[channel] || channel)
+    .join(" + ");
+
+  // Один канал — это ещё не омниканальность, и делать вид, что она
+  // случилась, нельзя: подсказываем, чего не хватает.
+  return data.channels.length > 1 ? (
+    <>
+      {data.messages.length} реплик · {channels} · один контакт
+    </>
+  ) : (
+    <>
+      {data.messages.length} реплик, пока только {channels}. Нажмите в виджете
+      «Продолжить в Telegram» — каналов станет два.
+    </>
+  );
+}
+
 export default function Omni() {
   // Сколько реплик уже показано. Логи устройств, подсветка и чек-лист из
   // этого числа выводятся, а не хранятся отдельно: в эталоне состояние
@@ -211,6 +326,25 @@ export default function Omni() {
   const [played, setPlayed] = useState(0);
   const [started, setStarted] = useState(false);
   const [finished, setFinished] = useState(false);
+
+  const [mode, setMode] = useState<Mode>("scenario");
+  const [real, setReal] = useState<OmniLive | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  // Диалог тянем один раз при открытии экрана, а не при переключении:
+  // кнопка «Живой диалог» должна нажиматься без паузы на запрос, а
+  // подпись под ней — сразу говорить, есть ли что показывать.
+  useEffect(() => {
+    getOmniLatest()
+      .then(setReal)
+      .catch(() => setFailed(true));
+  }, []);
+
+  const liveBeats = useMemo(
+    () => (real && !real.empty ? toBeats(real) : []),
+    [real],
+  );
+  const beats = mode === "scenario" ? OMNI : liveBeats;
 
   const timers = useRef<number[]>([]);
   const logs = useRef<Record<Dev, HTMLDivElement | null>>({
@@ -235,18 +369,27 @@ export default function Omni() {
     setPlayed(0);
 
     let at = START_DELAY;
-    OMNI.forEach((beat, index) => {
+    beats.forEach((beat, index) => {
       timers.current.push(
         window.setTimeout(() => setPlayed(index + 1), at),
       );
-      at += beat.cls === "sys" ? GAP_SYS : GAP_MESSAGE;
+      at += gap(beat, mode);
     });
     timers.current.push(
       window.setTimeout(() => setFinished(true), at + BUTTON_DELAY),
     );
   }
 
-  const shown = OMNI.slice(0, played);
+  function switchTo(next: Mode) {
+    if (next === mode) return;
+    stop();
+    setMode(next);
+    setStarted(false);
+    setFinished(false);
+    setPlayed(0);
+  }
+
+  const shown = beats.slice(0, played);
 
   // Подсветка устройства едет за последним `wake`. До первого `wake`
   // говорит Telegram — с него начинается разговор.
@@ -283,13 +426,55 @@ export default function Omni() {
       </div>
 
       <div className="omnibar">
-        <button className="playbtn" onClick={play} disabled={started && !finished}>
+        <button
+          className="playbtn"
+          onClick={play}
+          disabled={(started && !finished) || beats.length === 0}
+        >
           {finished ? "↻  Показать ещё раз" : "▶  Показать сценарий"}
         </button>
+        <div className="modetog">
+          <button
+            className={mode === "scenario" ? "on" : ""}
+            onClick={() => switchTo("scenario")}
+          >
+            Сценарий
+          </button>
+          <button
+            className={mode === "live" ? "on" : ""}
+            onClick={() => switchTo("live")}
+          >
+            Живой диалог
+          </button>
+        </div>
+
         <div className="omninote">
-          Один клиент — Далер. Смотрите, как диалог перетекает между экранами.
+          {mode === "scenario" ? (
+            "Один клиент — Далер. Смотрите, как диалог перетекает между экранами."
+          ) : (
+            <LiveNote data={real} failed={failed} />
+          )}
         </div>
       </div>
+
+      {mode === "live" && real && !real.empty && (
+        // Доказательство склейки: два внешних идентификатора и один
+        // человек. Этого в сценарии быть не может — он нарисован.
+        <div className="omniids">
+          <span className="idwho">
+            {real.contact?.display_name || `контакт ${real.contact?.id ?? "—"}`}
+          </span>
+          {real.identities.map((identity) => (
+            <span className="idchip" key={identity.channel + identity.external_id}>
+              <b>{identity.channel}</b> {shortId(identity.external_id)}
+            </span>
+          ))}
+          <span className="idchip">
+            диалог №{real.conversation_id}
+            {real.status === "operator" ? " · у оператора" : ""}
+          </span>
+        </div>
+      )}
 
       <div className="devices">
         {DEVICES.map((device) => {
@@ -324,7 +509,16 @@ export default function Omni() {
                   !(device.id === "Tg" && started) && (
                     <div className="devempty">{EMPTY[device.id]}</div>
                   )}
-                {messages.map((beat, index) => (
+                {messages.map((beat, index) =>
+                  beat.text !== undefined ? (
+                    // Живая реплика: текст клиента и ответ модели. Только
+                    // текстом — вставлять это разметкой нельзя ни при
+                    // каких условиях.
+                    <div key={index} className={"dm " + beat.cls}>
+                      {beat.cls === "op" && <span className="from">Оператор</span>}
+                      {beat.text}
+                    </div>
+                  ) : (
                   <div
                     key={index}
                     className={"dm " + beat.cls}
@@ -332,9 +526,10 @@ export default function Omni() {
                     // сноска на документ, подпись оператора — часть
                     // сценария и приходит из константы выше. Пользователь
                     // сюда ничего не вводит: экран презентационный.
-                    dangerouslySetInnerHTML={{ __html: beat.html }}
+                    dangerouslySetInnerHTML={{ __html: beat.html as string }}
                   />
-                ))}
+                  ),
+                )}
               </div>
             </div>
           );
