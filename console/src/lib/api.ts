@@ -128,6 +128,45 @@ export function getOmniLatest(): Promise<OmniLive> {
   return request<OmniLive>("/omni/latest");
 }
 
+// --- обзор (экран 01) ------------------------------------------------------
+//
+// Ряды `spark` приходят по одному числу на день и уже содержат нули за
+// дни без диалогов: линия обязана показывать провал провалом.
+
+export interface ReadinessItem {
+  title: string;
+  done: boolean;
+  hint: string;
+}
+
+export interface OverviewData {
+  days: number;
+  conversations: {
+    total: number;
+    by_bot: number;
+    bot_share: number;
+    channels: string[];
+    spark: number[];
+    spark_bot_share: number[];
+  };
+  latency: {
+    median_ms: number | null;
+    p95_ms: number | null;
+    spark: number[];
+  };
+  citations: {
+    answers: number;
+    cited: number;
+    share: number;
+    spark: number[];
+  };
+  readiness: ReadinessItem[];
+}
+
+export function getOverview(): Promise<OverviewData> {
+  return request<OverviewData>("/overview");
+}
+
 // --- инбокс оператора (экран 06) -------------------------------------------
 
 export type InboxStatus = "waiting" | "active" | "resolved";
