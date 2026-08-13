@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { WorkspaceInfo, getWorkspace } from "./lib/api";
-import Login from "./screens/Login";
 import Overview from "./screens/Overview";
 import Knowledge from "./screens/Knowledge";
 import Playground from "./screens/Playground";
@@ -56,8 +55,17 @@ function Topbar() {
   );
 }
 
+// ВХОДА НЕТ. Раньше первым экраном была форма пароля, но проверять его
+// было нечем: `api/auth.py` — стаб, и форма всё равно пускала внутрь по
+// таймауту, объясняя это словами «бэкенд недоступен». То есть замок был
+// нарисован. На демо-стенде он не нужен и мешает: консоль открывают на
+// встрече с проектора, лишний шаг — лишние тридцать секунд и риск
+// забытого пароля.
+//
+// Если консоль когда-нибудь выйдет за пределы стенда, вход вернётся
+// вместе с настоящей проверкой на бэкенде (раздел 9 ТЗ), а не отдельно
+// от неё.
 export default function App() {
-  const [authorized, setAuthorized] = useState(false);
   const [current, setCurrent] = useState<string>("ov");
   const [info, setInfo] = useState<WorkspaceInfo | null>(null);
 
@@ -65,13 +73,10 @@ export default function App() {
   // зашиты «Soro-27B · FP8» и «Аудит-лог включён», а на сервере GPTQ-int4,
   // и аудит теперь выключается переключателем на экране 01.
   useEffect(() => {
-    if (!authorized) return;
     getWorkspace()
       .then(setInfo)
       .catch(() => setInfo(null));
-  }, [authorized, current]);
-
-  if (!authorized) return <Login onDone={() => setAuthorized(true)} />;
+  }, [current]);
 
   return (
     <div className="shell">

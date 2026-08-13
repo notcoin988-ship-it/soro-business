@@ -29,6 +29,7 @@ from fastapi import (
 from pydantic import BaseModel
 from redis import Redis
 from rq import Queue
+from sqlalchemy import desc as sql_desc
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,7 +37,19 @@ from app.config import settings
 from app.core import audit, policy
 from app.core.dialog import get_workspace
 from app.db import get_session
-from app.models import Chunk, Document
+from app.models import (
+    ChannelIdentity,
+    Chunk,
+    Contact,
+    Conversation,
+    Document,
+    Message,
+)
+
+# Сколько последних реплик отдаём экрану 04. Сорок — это примерно вдвое
+# больше сценария из прототипа: длинный разговор на трёх устройствах уже
+# не читается с проектора, а короткий помещается целиком.
+OMNI_MESSAGE_LIMIT = 40
 
 router = APIRouter(prefix="/api", tags=["console"])
 
@@ -293,6 +306,92 @@ async def delete_document(
 
     await session.delete(document)
     await session.commit()
+
+
+@router.get("/omni/latest")
+async def omni_latest(session: AsyncSession = Depends(get_session)) -> dict:
+    """Настоящий омниканальный диалог для экрана 04.
+
+    ЭТОГО ЭНДПОИНТА НЕТ В ПРИЛОЖЕНИИ А. Экран 04 по ТЗ презентационный:
+    пятнадцать шагов сценария и никакого бэкенда. Сценарий и остаётся —
+    но рядом с ним экран показывает диалог, который действительно
+    случился, и это единственное место в демо, где омниканальность можно
+    не пообещать, а предъявить: те же три устройства, только сообщения
+    настоящие.
+
+    Берём диалог, в котором больше всего РАЗНЫХ каналов, из свежих —
+    последний. Один канал тоже отдаём: показать «пока только Telegram»
+    честнее, чем пустой экран.
+    """
+    workspace = await get_workspace(session)
+
+    best = (
+        await session.execute(
+            select(
+                Message.conversation_id,
+                func.count(func.distinct(Message.channel)).label("channels"),
+                func.max(Message.id).label("last"),
+            )
+            .where(Message.workspace_id == workspace.id, Message.role != "system")
+            .group_by(Message.conversation_id)
+            .order_by(sql_desc("channels"), sql_desc("last"))
+            .limit(1)
+        )
+    ).first()
+
+    if best is None:
+        return {"empty": True, "messages": [], "channels": [], "identities": []}
+
+    conversation = await session.get(Conversation, best.conversation_id)
+    contact = await session.get(Contact, conversation.contact_id)
+    identities = (
+        await session.scalars(
+            select(ChannelIdentity).where(
+                ChannelIdentity.contact_id == conversation.contact_id
+            )
+        )
+    ).all()
+
+    messages = (
+        await session.scalars(
+            select(Message)
+            .where(
+                Message.conversation_id == conversation.id,
+                Message.role != "system",
+            )
+            .order_by(Message.id.desc())
+            .limit(OMNI_MESSAGE_LIMIT)
+        )
+    ).all()
+
+    return {
+        "empty": False,
+        "conversation_id": conversation.id,
+        "status": conversation.status,
+        "contact": {
+            "id": contact.id if contact else None,
+            "display_name": contact.display_name if contact else None,
+        },
+        # Склейка — главное, что показывает этот блок: два внешних id,
+        # один человек.
+        "identities": [
+            {"channel": identity.channel, "external_id": identity.external_id}
+            for identity in identities
+        ],
+        "channels": sorted({message.channel for message in messages}),
+        "messages": [
+            {
+                "channel": message.channel,
+                "role": message.role,
+                # Маска, а не оригинал: экран 04 показывают на встрече с
+                # проектора, и номер карты клиента там светить нельзя.
+                # Инбокс оператора — другое дело, там нужен оригинал.
+                "text": message.text_masked or message.text,
+                "created_at": message.created_at.isoformat(),
+            }
+            for message in reversed(messages)
+        ],
+    }
 
 
 async def _to_out(session: AsyncSession, document: Document) -> DocumentOut:

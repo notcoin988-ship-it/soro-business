@@ -22,14 +22,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-// Вход в консоль: один общий логин-пароль на воркспейс (раздел 9).
-// Ролей и регистрации нет — раздел 1.2 выносит это за скобки версии.
-export async function login(password: string): Promise<void> {
-  await request("/auth/login", {
-    method: "POST",
-    body: JSON.stringify({ login: "admin", password }),
-  });
-}
+// Входа в консоль здесь нет намеренно: демо-стенд открывается сразу на
+// экране 01. Подробности — в комментарии к App.tsx.
 
 // Дальше по мере готовности бэкенда: documents, playground, inbox,
 // analytics, подписка на /ws/inbox.
@@ -96,6 +90,38 @@ export interface WorkspaceInfo {
 
 export function getWorkspace(): Promise<WorkspaceInfo> {
   return request<WorkspaceInfo>("/workspace");
+}
+
+// --- живой омниканальный диалог (экран 04) ---------------------------------
+//
+// Экран 04 по ТЗ презентационный, и сценарий на нём остаётся. Но рядом со
+// сценарием он показывает диалог, который действительно случился: те же
+// три устройства, только сообщения настоящие.
+
+export interface OmniMessage {
+  channel: string;
+  role: "user" | "assistant" | "operator";
+  text: string;
+  created_at: string;
+}
+
+export interface OmniIdentity {
+  channel: string;
+  external_id: string;
+}
+
+export interface OmniLive {
+  empty: boolean;
+  conversation_id?: number;
+  status?: string;
+  contact?: { id: number | null; display_name: string | null };
+  identities: OmniIdentity[];
+  channels: string[];
+  messages: OmniMessage[];
+}
+
+export function getOmniLatest(): Promise<OmniLive> {
+  return request<OmniLive>("/omni/latest");
 }
 
 export function setSecurity(
