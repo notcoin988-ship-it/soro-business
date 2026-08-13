@@ -153,18 +153,47 @@ async def test_channel_is_taken_from_the_first_message(client, session, workspac
     assert body["channels"] == [{"channel": "telegram", "conversations": 1}]
 
 
-async def test_languages_split_by_tajik_letters(client, session, workspace):
+async def test_languages_split_by_letters_and_words(client, session, workspace):
+    """Таджикский узнаётся и без диакритики.
+
+    Живой прогон показал, зачем это нужно: эвристика ТЗ смотрит только на
+    буквы ӣӯҳҷғқ, а клиенты пишут с телефонной раскладки без них — экран
+    показывал «100% русского» на половине таджикских вопросов.
+    """
     conversation = await conversation_with(session, workspace)
-    await say(session, conversation, "Фоизи амонат чанд аст?")  # ӣ нет, но есть кириллица
-    await say(session, conversation, "Мӯҳлаташ чанд сол?")
+    await say(session, conversation, "Мӯҳлаташ чанд сол?")  # буквы
+    await say(session, conversation, "Фоизи амонати Ояндасоз чанд аст?")  # слова
+    await say(session, conversation, "салом мехохам кредить гирам")  # слова
+    await say(session, conversation, "Какая ставка по вкладу?")
     await say(session, conversation, "hello there")
 
     body = await get(client)
     languages = {row["lang"]: row["messages"] for row in body["languages"]}
 
-    assert languages["tj"] == 1
+    assert languages["tj"] == 3
     assert languages["ru"] == 1
     assert languages["other"] == 1
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Сколько стоит пластиковая карта?",  # «пласт» внутри слова
+        "Хочу принять участие в акции",  # «аст» внутри «участие»
+        "Подарок ко дню рождения",
+    ],
+)
+async def test_russian_is_not_mistaken_for_tajik(client, session, workspace, text):
+    """Сторож к списку слов: границы слова обязательны, иначе «аст»
+    находится внутри «участие», и русские вопросы уезжают в таджикские."""
+    conversation = await conversation_with(session, workspace)
+    await say(session, conversation, text)
+
+    body = await get(client)
+    languages = {row["lang"]: row["messages"] for row in body["languages"]}
+
+    assert languages.get("tj", 0) == 0
+    assert languages["ru"] == 1
 
 
 async def test_top_questions_come_from_masked_text(client, session, workspace):
