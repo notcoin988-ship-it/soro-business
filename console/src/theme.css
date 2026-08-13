@@ -3,6 +3,57 @@
    Здесь — только то, чего в статичном прототипе быть не могло: поля
    загрузки файлов, сообщения об ошибках, живые состояния экранов. */
 
+/* --- экран 06: инбокс оператора --- */
+
+/* В эталоне эти куски свёрстаны инлайновыми стилями прямо в разметке
+   (заголовок секции очереди, шапка переписки, лента, подвал). Значения
+   перенесены один в один — просто получили имена, потому что в React
+   повторять их в трёх местах нечем. */
+.qhead {
+  padding: 13px 14px; border-bottom: 1px solid var(--line-soft);
+  font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--muted2);
+}
+.qhead + .qempty, .qempty {
+  padding: 12px 14px; font-size: 11.5px; color: var(--muted2);
+  text-align: center;
+}
+.convhead {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding-bottom: 14px; border-bottom: 1px solid var(--line-soft);
+}
+.convlog {
+  padding: 16px 0; display: flex; flex-direction: column; gap: 14px;
+  max-height: 46vh; overflow-y: auto;
+}
+.convlog::-webkit-scrollbar { width: 5px; }
+.convlog::-webkit-scrollbar-thumb { background: var(--line); border-radius: 9px; }
+.convfoot { border-top: 1px solid var(--line-soft); padding-top: 14px; }
+
+/* Подпись оператора в ленте: в эталоне таких реплик нет — там переписка
+   обрывается на эскалации, — но в живом диалоге они есть, и отличать их
+   от ответов бота обязательно. */
+.opfrom {
+  display: block; font-size: 9.5px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ok); margin-bottom: 4px;
+}
+
+/* Подсказка оператору — фрагменты, на которых бот сдался. */
+.hintrow { margin-top: 10px; }
+.hintsrc {
+  font-size: 10.5px; color: var(--rose-hi); margin-bottom: 3px;
+}
+.hinttext {
+  font-size: 12.5px; color: var(--muted); line-height: 1.6;
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.replyrow {
+  display: flex; gap: 8px; align-items: flex-end; margin-top: 14px;
+}
+.replyrow .text { flex: 1; resize: vertical; min-height: 40px; }
+
 /* --- экран 04: переключатель «сценарий / живой диалог» --- */
 
 /* В прототипе экран 04 умеет одно: проиграть нарисованный сценарий.
