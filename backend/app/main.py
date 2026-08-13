@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import console, inbox, playground
+from app.api import analytics, console, inbox, playground
 from app.channels import telegram, widget
 from app.config import settings
 
@@ -19,6 +19,7 @@ app = FastAPI(title="Soro Business Console", version="1.0.0")
 app.include_router(console.router)
 app.include_router(playground.router)
 app.include_router(inbox.router)
+app.include_router(analytics.router)
 # Каналы подключаются по мере готовности. Telegram первый — раздел 7.1.
 app.include_router(telegram.router)
 app.include_router(widget.router)
