@@ -22,14 +22,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-// Вход в консоль: один общий логин-пароль на воркспейс (раздел 9).
-// Ролей и регистрации нет — раздел 1.2 выносит это за скобки версии.
-export async function login(password: string): Promise<void> {
-  await request("/auth/login", {
-    method: "POST",
-    body: JSON.stringify({ login: "admin", password }),
-  });
-}
+// Входа в консоль здесь нет намеренно: демо-стенд открывается сразу на
+// экране 01. Подробности — в комментарии к App.tsx.
 
 // Дальше по мере готовности бэкенда: documents, playground, inbox,
 // analytics, подписка на /ws/inbox.

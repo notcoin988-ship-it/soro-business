@@ -1,21 +1,7 @@
 /* Наши добавления к эталону.
    Всё, что есть в прототипе, лежит в prototype.css и не редактируется.
-   Здесь — только то, чего в статичном прототипе быть не могло: экран
-   входа, поля загрузки файлов, сообщения об ошибках. */
-
-/* --- вход в консоль (в прототипе такого экрана нет) --- */
-.login { min-height: 100vh; display: grid; place-items: center; }
-.login form {
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: var(--r); padding: 28px; width: 320px;
-  display: flex; flex-direction: column; gap: 12px;
-}
-.login h1 {
-  font-family: 'Unbounded', sans-serif; font-size: 18px; font-weight: 500;
-  margin: 0 0 2px;
-}
-.login p { color: var(--muted); font-size: 12.5px; margin: 0 0 6px; }
-.login .err { color: var(--rose-hi); font-size: 12px; min-height: 16px; }
+   Здесь — только то, чего в статичном прототипе быть не могло: поля
+   загрузки файлов, сообщения об ошибках, живые состояния экранов. */
 
 /* --- формы добавления источников на экране 02 --- */
 .text {
