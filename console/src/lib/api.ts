@@ -128,6 +128,30 @@ export function getOmniLatest(): Promise<OmniLive> {
   return request<OmniLive>("/omni/latest");
 }
 
+// --- аналитика (экран 07) --------------------------------------------------
+
+export interface Analytics {
+  days: number;
+  conversations: {
+    total: number;
+    by_bot: number;
+    by_operator: number;
+    bot_share: number;
+  };
+  hours_saved: number;
+  median_latency_ms: number | null;
+  channels: { channel: string; conversations: number }[];
+  languages: { lang: string; messages: number }[];
+  top_questions: { question: string; count: number }[];
+  attention: { no_answer: number };
+  // Средней оценки нет: таблица feedback пуста и без эндпоинта.
+  rating: number | null;
+}
+
+export function getAnalytics(days = 7): Promise<Analytics> {
+  return request<Analytics>(`/analytics?days=${days}`);
+}
+
 export function setSecurity(
   changes: Partial<Omit<Security, "kb_only">>,
 ): Promise<{ security: Security }> {
