@@ -194,13 +194,31 @@ async def add_document(
                 detail=f"{suffix or 'файл без расширения'}: принимаем pdf, docx, xlsx",
             )
 
+        # ПОТОЛОК РАЗМЕРА, и читаем кусками. `await file.read()` целиком
+        # держит файл в памяти: полугигабайтный «скан архива» клал бы
+        # процесс раньше, чем кончился бы диск. Пишем по мегабайту и
+        # обрываемся на превышении.
         workspace = await get_workspace(session)
         folder = Path(settings.UPLOAD_DIR) / workspace.slug
         folder.mkdir(parents=True, exist_ok=True)
         # имя на диске — uuid: в именах банковских файлов бывают пробелы,
         # кириллица и нормализация NFD, на которой ломаются ссылки
         path = folder / f"{uuid.uuid4()}{suffix}"
-        path.write_bytes(await file.read())
+        limit = settings.UPLOAD_MAX_MB * 1024 * 1024
+        written = 0
+        with path.open("wb") as target:
+            while chunk := await file.read(1024 * 1024):
+                written += len(chunk)
+                if limit and written > limit:
+                    target.close()
+                    # Недокачанный файл на диске не оставляем: индексатор
+                    # потом честно попытается его прочитать.
+                    path.unlink(missing_ok=True)
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"файл больше {settings.UPLOAD_MAX_MB} МБ",
+                    )
+                target.write(chunk)
 
         document = await _create(
             session,

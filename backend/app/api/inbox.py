@@ -50,7 +50,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core import escalation
+from app.core import bus, escalation
 from app.core.dialog import get_workspace
 from app.db import get_session
 from app.models import (
@@ -97,11 +97,11 @@ class TakeIn(BaseModel):
 
 
 class Hub:
-    """Открытые сокеты операторов.
+    """Открытые сокеты операторов ЭТОГО процесса.
 
-    В памяти процесса, как и всё остальное в консоли: операторов единицы,
-    процесс один. Появится второй воркер — понадобится Redis pub/sub, и
-    менять придётся только этот класс.
+    Хаб остался в памяти — иначе и быть не может, сокет держит конкретный
+    процесс. Межпроцессную доставку взяла на себя шина (`core/bus`): в
+    хаб попадает то, что пришло из неё.
     """
 
     def __init__(self) -> None:
@@ -131,11 +131,33 @@ hub = Hub()
 
 
 async def _relay(event: str, payload: dict) -> None:
-    await hub.broadcast(event, payload)
+    """Событие ядра — во все процессы, а не только в свой.
+
+    Сокеты операторов держит конкретный процесс: с двумя воркерами
+    эскалация, случившаяся в одном, не доходила до оператора, чей сокет
+    висит на другом. Поэтому событие уходит в шину, а раздаёт его каждому
+    своему сокету `_deliver_local` — включая тот процесс, где оно и
+    родилось.
+    """
+    await bus.publish(bus.INBOX, {"event": event, "payload": payload})
 
 
-# Ядро ничего не знает про WebSocket: оно зовёт `escalation.notify`, а
-# доставку берёт на себя этот модуль. Так тесты ядра не поднимают сокеты.
+def _deliver_local(message: dict) -> None:
+    """Разослать событие сокетам ЭТОГО процесса. Зовётся шиной."""
+    event, payload = message["event"], message["payload"]
+    task = asyncio.create_task(hub.broadcast(event, payload))
+    _relay_tasks.add(task)
+    task.add_done_callback(_relay_tasks.discard)
+
+
+# Задачи рассылки: без ссылки сборщик мусора вправе выбросить их на
+# середине, и оператор не увидит эскалацию.
+_relay_tasks: set[asyncio.Task] = set()
+
+bus.on(bus.INBOX, _deliver_local)
+
+# Ядро ничего не знает ни про WebSocket, ни про шину: оно зовёт
+# `escalation.notify`. Так тесты ядра не поднимают ни сокетов, ни Redis.
 escalation.subscribe(_relay)
 
 

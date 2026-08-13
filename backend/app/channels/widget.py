@@ -50,7 +50,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core import dialog, feedback
+from app.core import bus, dialog, feedback, limits
 from app.db import SessionLocal, get_session
 from app.models import Chunk, ChannelIdentity, Conversation, Document, Message
 
@@ -117,14 +117,17 @@ def telegram_link(token: str) -> str:
 #
 # Событие рождается там, где нет запроса клиента: ответ бота считает
 # фоновая задача, реплику оператора приносит инбокс. Дотянуться до
-# открытого SSE-соединения им нужно через что-то общее — вот через это.
+# открытого SSE-соединения им нужно через что-то общее.
 #
-# ПОЧЕМУ В ПАМЯТИ, А НЕ ЧЕРЕЗ REDIS PUB/SUB. Бэкенд — один процесс, как и
-# у операторского WebSocket в `api/inbox.py`. Появится второй воркер —
-# понадобится Redis, и менять придётся ровно эти три функции.
+# ЧЕРЕЗ REDIS, А НЕ ЧЕРЕЗ ПАМЯТЬ. Раньше здесь был словарь процесса, и
+# при нескольких воркерах uvicorn клиент подключался к одному процессу, а
+# событие рождалось в другом — до браузера не доходило ничего. Теперь
+# `publish` уходит в шину (`core/bus`), а каждый процесс раздаёт своим
+# очередям то, что пришло из неё. Без Redis шина доставляет локально, и
+# при одном процессе это ровно прежнее поведение.
 
-# uid → очереди открытых потоков. Вкладок у одного клиента может быть
-# несколько, и каждая ждёт свою копию событий.
+# uid → очереди открытых потоков ЭТОГО процесса. Вкладок у одного клиента
+# может быть несколько, и каждая ждёт свою копию событий.
 _streams: dict[str, set[asyncio.Queue]] = {}
 
 # Потолок на очередь: клиент с закрытым ноутбуком не должен копить ответы
@@ -139,12 +142,37 @@ _tasks: set[asyncio.Task] = set()
 
 
 def publish(uid: str, event: str, data: dict) -> None:
-    """Разослать событие всем открытым потокам этого клиента."""
+    """Разослать событие клиенту — во всех процессах.
+
+    Синхронная подпись сохранена намеренно: её зовут из колбэка
+    `on_delta`, который прилетает посреди приёма потока от модели, и
+    делать его асинхронным значит тащить await в каждый кусок ответа.
+    Отправку в шину планируем задачей.
+    """
+    payload = {"uid": uid, "event": event, "data": data}
+    try:
+        task = asyncio.get_running_loop().create_task(bus.publish(bus.WIDGET, payload))
+        # Держим ссылку: без неё сборщик мусора вправе выбросить задачу.
+        _tasks.add(task)
+        task.add_done_callback(_tasks.discard)
+    except RuntimeError:
+        # Цикла нет — значит зовут из синхронного кода (скрипт, тест).
+        # Доставляем сразу, иначе событие пропадёт молча.
+        deliver_local(payload)
+
+
+def deliver_local(payload: dict) -> None:
+    """Разложить событие по очередям ЭТОГО процесса. Зовётся шиной."""
+    uid = payload["uid"]
+    event = payload["event"]
     for queue in _streams.get(uid, set()):
         if queue.qsize() >= QUEUE_LIMIT:
             log.warning("поток %s не читают, событие %s выброшено", uid, event)
             continue
-        queue.put_nowait((event, data))
+        queue.put_nowait((event, payload["data"]))
+
+
+bus.on(bus.WIDGET, deliver_local)
 
 
 def _subscribe(uid: str) -> asyncio.Queue:
@@ -197,6 +225,12 @@ async def post_message(payload: MessageIn) -> dict:
         raise HTTPException(status_code=422, detail="пустой вопрос")
     if not payload.uid.strip():
         raise HTTPException(status_code=422, detail="нет uid")
+
+    # Порядок важен: сначала лимит, потом работа. Иначе поток запросов
+    # успеет создать фоновые задачи, и отказ придёт уже после того, как
+    # модель начала считать.
+    limits.hit(f"widget:{payload.uid}")
+    text = limits.check_length(text)
 
     message_id = uuid.uuid4().hex
     # Ссылку на задачу держим, пока она жива: без неё сборщик мусора
@@ -313,6 +347,8 @@ async def rate(
     иначе любой желающий испортит статистику чужого банка, зная лишь
     порядковый номер строки в `messages`.
     """
+    limits.hit(f"feedback:{payload.uid}")
+
     workspace = await dialog.get_workspace(session, payload.ws)
     identity = await session.scalar(
         select(ChannelIdentity).where(
@@ -347,6 +383,10 @@ async def link_token(
     Идентичность заводим, если её ещё нет: клиент мог нажать кнопку, не
     написав ни слова, — например, чтобы дочитать с телефона в метро.
     """
+    # Токен склейки — вход в чужую переписку, если его подобрать. Лимит
+    # здесь строже: человек нажимает «Продолжить в Telegram» раз, ну два.
+    limits.hit(f"link:{payload.uid}", limit=5)
+
     workspace = await dialog.get_workspace(session, payload.ws)
     identity = await dialog.resolve_identity(
         session, workspace.id, CHANNEL, payload.uid

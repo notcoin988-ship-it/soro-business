@@ -4,6 +4,7 @@
 должно быть — она в core/.
 """
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -20,10 +21,24 @@ from app.api import (
     workspaces,
 )
 from app.channels import telegram, widget
-from app.core import current
+from app.core import bus, current
 from app.config import settings
 
-app = FastAPI(title="Soro Business Console", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Подписчик шины живёт столько же, сколько приложение.
+
+    Без него события доставляются только внутри своего процесса — этого
+    хватает одному воркеру, но не двум (см. `core/bus`).
+    """
+    await bus.start()
+    try:
+        yield
+    finally:
+        await bus.stop()
+
+
+app = FastAPI(title="Soro Business Console", version="1.0.0", lifespan=lifespan)
 
 @app.middleware("http")
 async def pick_workspace(request, call_next):
