@@ -152,7 +152,9 @@ async def test_client_rates_the_operator(client, session, workspace):
         )
 
     assert response.status_code == 200
-    saved = await session.scalar(select(Feedback))
+    saved = await session.scalar(
+        select(Feedback).where(Feedback.workspace_id == workspace.id)
+    )
     assert saved.score == 1
     assert saved.message_id == closed["rate_for"]
 
@@ -178,7 +180,13 @@ async def test_second_click_replaces_the_first(client, session, workspace):
             json={"uid": UID, "message_id": closed["rate_for"], "score": -1},
         )
 
-    rows = (await session.scalars(select(Feedback))).all()
+    # Фильтр по воркспейсу обязателен: база разработки живая, и оценки в
+    # ней остаются от ручных прогонов.
+    rows = (
+        await session.scalars(
+            select(Feedback).where(Feedback.workspace_id == workspace.id)
+        )
+    ).all()
     assert len(rows) == 1
     assert rows[0].score == -1
 
@@ -198,7 +206,9 @@ async def test_score_outside_the_check_is_rejected(client, session, workspace):
         )
 
     assert response.status_code == 422
-    assert await session.scalar(select(Feedback)) is None
+    assert await session.scalar(
+        select(Feedback).where(Feedback.workspace_id == workspace.id)
+    ) is None
 
 
 async def test_cannot_rate_a_stranger_dialog(client, session, workspace):
@@ -265,7 +275,9 @@ async def test_telegram_button_stores_the_rating(client, session, workspace, mon
     data = keyboard.inline_keyboard[0][0].callback_data
 
     assert await telegram.store_rating(data) is True
-    saved = await session.scalar(select(Feedback))
+    saved = await session.scalar(
+        select(Feedback).where(Feedback.workspace_id == workspace.id)
+    )
     assert saved.score == 1
 
 
