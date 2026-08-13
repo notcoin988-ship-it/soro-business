@@ -10,13 +10,37 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import analytics, channels, console, inbox, overview, playground
+from app.api import (
+    analytics,
+    channels,
+    console,
+    inbox,
+    overview,
+    playground,
+    workspaces,
+)
 from app.channels import telegram, widget
+from app.core import current
 from app.config import settings
 
 app = FastAPI(title="Soro Business Console", version="1.0.0")
 
+@app.middleware("http")
+async def pick_workspace(request, call_next):
+    """Какой банк открыт в консоли — из заголовка `X-Workspace`.
+
+    Ставится на каждый запрос и только на время запроса: подробности и
+    причина, почему не параметр в каждой ручке, — в `core/current`.
+    """
+    current.set_slug(request.headers.get(current.HEADER))
+    try:
+        return await call_next(request)
+    finally:
+        current.set_slug(None)
+
+
 app.include_router(console.router)
+app.include_router(workspaces.router)
 app.include_router(playground.router)
 app.include_router(inbox.router)
 app.include_router(analytics.router)

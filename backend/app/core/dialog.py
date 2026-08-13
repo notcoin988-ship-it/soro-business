@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core import audit, context, escalation, llm, phrases, policy, rag
+from app.core import audit, context, current, escalation, llm, phrases, policy, rag
 from app.core.pii import mask
 from app.models import ChannelIdentity, Contact, Conversation, Message, Workspace
 
@@ -129,8 +129,14 @@ class Reply:
 
 
 async def get_workspace(session: AsyncSession, slug: str | None = None) -> Workspace:
-    """Воркспейс по slug. В этой версии он один — из `.env`."""
-    slug = slug or settings.WORKSPACE_DEFAULT_SLUG
+    """Воркспейс по slug.
+
+    Три источника, в порядке убывания приоритета: явный аргумент (его
+    передают каналы — виджет знает свой `data-ws`), выбор оператора в
+    консоли (заголовок `X-Workspace`, см. `core/current`) и умолчание из
+    `.env`. Умолчание последнее: пока банк один, оно и работает.
+    """
+    slug = slug or current.slug() or settings.WORKSPACE_DEFAULT_SLUG
     workspace = await session.scalar(select(Workspace).where(Workspace.slug == slug))
     if workspace is None:
         raise LookupError(f"воркспейс {slug!r} не заведён")
@@ -284,6 +290,7 @@ async def load_history(
         context.Turn(
             role="user" if row.role == "user" else "assistant",
             text=row.text_masked or row.text,
+            chunks=tuple(row.chunks_used or ()),
         )
         for row in reversed(rows)
     ]
@@ -335,7 +342,15 @@ async def search_in_context(
     if phrases.is_affirmation(question):
         topic = context.offered_topic(history)
         if topic:
-            agreed = await rag.search(session, topic, workspace_id)
+            # Прочитанное клиентом из выдачи убираем: он попросил БОЛЬШЕ.
+            # Без этого поиск приносил те же чанки, модель пересказывала
+            # свой прошлый ответ, и разговор ходил по кругу.
+            agreed = await rag.search(
+                session,
+                topic,
+                workspace_id,
+                exclude_ids=context.used_chunks(history),
+            )
             if agreed.has_answer:
                 log.info("согласие раскрыто в тему: %r", topic)
                 return Found(agreed, topic, rewritten=True)
