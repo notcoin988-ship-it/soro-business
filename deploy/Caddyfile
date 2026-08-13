@@ -1,0 +1,54 @@
+# Caddy перед бэкендом: HTTPS, домен, статика виджета.
+#
+# ПОЧЕМУ CADDY, А НЕ NGINX. Сертификат Let's Encrypt он получает и продлевает
+# сам, без certbot и без крона: для стенда, который поднимает один человек
+# перед пилотом, это разница между «десять минут» и «полдня с конфигами».
+#
+# ДОМЕН БЕРЁТСЯ ИЗ ОКРУЖЕНИЯ ({$SORO_DOMAIN}) — тот же файл годится и для
+# демо-стенда, и для пилота банка. Пока домена нет, поднимается на :80 без
+# TLS (см. docker-compose.prod.yml).
+
+{$SORO_DOMAIN} {
+	encode zstd gzip
+
+	# SSE и WebSocket. Буферизация ответов ломает и то, и другое: поток
+	# приходит одним куском в конце, то есть перестаёт быть потоком.
+	# `flush_interval -1` отключает её для этих путей.
+	@stream path /widget/stream /api/playground/stream
+	reverse_proxy @stream backend:8000 {
+		flush_interval -1
+	}
+
+	@ws path /ws/*
+	reverse_proxy @ws backend:8000
+
+	# Консоль — статика, собранная `npm run build`. Отдаётся Caddy, а не
+	# бэкендом: это семь файлов, и гонять их через Python незачем.
+	handle /console/* {
+		uri strip_prefix /console
+		root * /srv/console
+		try_files {path} /index.html
+		file_server
+	}
+
+	handle {
+		reverse_proxy backend:8000
+	}
+
+	# Заголовки, которые спросит служба безопасности банка. HSTS Caddy
+	# ставит сам при включённом TLS.
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		# X-Frame-Options НЕ ставим: виджет живёт в iframe на сайте банка,
+		# и запрет фреймов сломал бы ровно то, что мы продаём.
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 50MiB
+			roll_keep 7
+		}
+	}
+}
