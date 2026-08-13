@@ -1,0 +1,88 @@
+# Прод-контур: то же приложение, что в разработке, плюс Caddy с HTTPS и
+# бэкапы. Запускается ВМЕСТЕ с базовым файлом, а не вместо него:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# ЧЕМ ОТЛИЧАЕТСЯ ОТ РАЗРАБОТКИ:
+#
+#   * порты бэкенда и базы наружу НЕ торчат — только Caddy на 80/443.
+#     На стенде разработки 5432 и 8000 открыты, и это нормально там и
+#     недопустимо здесь;
+#   * `--reload` выключен: он держит в памяти вотчер на весь /code и
+#     перезапускает процесс от любого чиха файловой системы;
+#   * добавлен `backup` — pg_dump по расписанию (см. scripts/backup.sh).
+#
+# СЕКРЕТЫ те же, из `.env`, и он по-прежнему в .gitignore. Перед первым
+# запуском на сервере проверить, что CONSOLE_PASSWORD и TELEGRAM_* не
+# остались плейсхолдерами: экран 01 покажет это же в чек-листе.
+
+services:
+  db:
+    # Порт наружу не публикуем: до базы ходит только приложение изнутри
+    # сети compose. Строка ниже отменяет `ports` из базового файла.
+    ports: !reset []
+    restart: unless-stopped
+
+  redis:
+    ports: !reset []
+    restart: unless-stopped
+
+  embeddings:
+    ports: !reset []
+    restart: unless-stopped
+
+  reranker:
+    ports: !reset []
+    restart: unless-stopped
+
+  backend:
+    ports: !reset []
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+    # Виджет и скрипты монтируются и здесь: `/w.js`, страницы виджета и
+    # `scripts/acceptance.py` нужны на проде ровно так же, как на стенде.
+    volumes:
+      - "./backend:/code"
+      - "./scripts:/code/scripts"
+      - "./tests:/code/tests"
+      - "./widget:/code/widget"
+      - "uploads:/data/uploads"
+
+  worker:
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on: [backend]
+    restart: unless-stopped
+    ports: [ "80:80", "443:443" ]
+    environment:
+      # Домен пилота. Пока его нет — `SORO_DOMAIN=:80`, и Caddy работает
+      # без TLS: сертификат на IP-адрес не выдают.
+      SORO_DOMAIN: "${SORO_DOMAIN:-:80}"
+    volumes:
+      - "./deploy/Caddyfile:/etc/caddy/Caddyfile:ro"
+      - "./console/dist:/srv/console:ro"
+      - "caddydata:/data"
+      - "caddyconfig:/config"
+      - "caddylogs:/var/log/caddy"
+
+  backup:
+    # Тот же образ, что у базы: pg_dump обязан быть той же мажорной
+    # версии, иначе он откажется снимать дамп с чужого сервера.
+    image: pgvector/pgvector:pg16
+    depends_on: [db]
+    restart: unless-stopped
+    environment:
+      PGPASSWORD: soro
+      BACKUP_KEEP_DAYS: "${BACKUP_KEEP_DAYS:-14}"
+    volumes:
+      - "./scripts/backup.sh:/backup.sh:ro"
+      - "backups:/backups"
+    entrypoint: ["/bin/sh", "/backup.sh", "--loop"]
+
+volumes:
+  caddydata: {}
+  caddyconfig: {}
+  caddylogs: {}
+  backups: {}
