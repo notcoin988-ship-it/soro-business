@@ -72,7 +72,7 @@ async def demo_workspace(session) -> Workspace:
     )
     if workspace is None:
         workspace = Workspace(
-            slug=settings.WORKSPACE_DEFAULT_SLUG, name="Банк Эсхата"
+            slug=settings.WORKSPACE_DEFAULT_SLUG, name="ДЕМО банк"
         )
         session.add(workspace)
         await session.flush()

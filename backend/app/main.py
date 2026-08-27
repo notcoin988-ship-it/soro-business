@@ -1,7 +1,7 @@
 """Создание FastAPI-приложения (раздел 2.3 ТЗ).
 
-Здесь собирается приложение: /health и роутеры каналов. Логики нет и не
-должно быть — она в core/.
+Здесь собирается приложение: роутеры, middleware воркспейса, подписчик
+шины и статика виджета. Логики нет и не должно быть — она в core/.
 """
 
 from contextlib import asynccontextmanager
@@ -13,16 +13,18 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api import (
     analytics,
+    health,
     channels,
     console,
     inbox,
     overview,
     playground,
+    reports,
     workspaces,
 )
 from app.channels import telegram, widget
-from app.core import bus, current
 from app.config import settings
+from app.core import bus, current
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -40,6 +42,30 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Soro Business Console", version="1.0.0", lifespan=lifespan)
 
+# Доступ с другого домена — только по явному списку.
+#
+# Нужен, когда консоль выложена отдельно от бэкенда: браузер иначе
+# заблокирует и обычные запросы, и поток ответа (SSE). Список задаётся
+# `CORS_ORIGINS` в `.env`; пусто — middleware не подключается вовсе, и
+# поведение остаётся прежним.
+#
+# `allow_credentials` не включаем: консоль ходит с заголовком
+# `X-Workspace`, а не с куками, и разрешать отправку кук чужому origin
+# незачем.
+_origins = [item.strip() for item in settings.CORS_ORIGINS.split(",") if item.strip()]
+if _origins:
+    from fastapi.middleware.cors import CORSMiddleware
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_origins,
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        # `ngrok-skip-browser-warning` — консоль шлёт его, чтобы туннель
+        # отдал ответ API, а не HTML-заглушку. Не разрешить его здесь —
+        # значит завалить preflight на каждом запросе.
+        allow_headers=["Content-Type", "X-Workspace", "ngrok-skip-browser-warning"],
+    )
+
 @app.middleware("http")
 async def pick_workspace(request, call_next):
     """Какой банк открыт в консоли — из заголовка `X-Workspace`.
@@ -47,18 +73,27 @@ async def pick_workspace(request, call_next):
     Ставится на каждый запрос и только на время запроса: подробности и
     причина, почему не параметр в каждой ручке, — в `core/current`.
     """
-    current.set_slug(request.headers.get(current.HEADER))
+    # Заголовок — основной путь. Но поток ответа консоль открывает через
+    # EventSource, а он заголовки слать не умеет вовсе: там воркспейс
+    # приходит параметром `?ws=`, как это давно сделано в виджете
+    # (`/widget/stream?ws=...`). Без этого площадка отвечала бы данными
+    # банка по умолчанию, даже когда в шапке выбран другой — на показе
+    # заказчику это худший из возможных сюрпризов.
+    slug = request.headers.get(current.HEADER) or request.query_params.get("ws")
+    current.set_slug(slug)
     try:
         return await call_next(request)
     finally:
         current.set_slug(None)
 
 
+app.include_router(health.router)
 app.include_router(console.router)
 app.include_router(workspaces.router)
 app.include_router(playground.router)
 app.include_router(inbox.router)
 app.include_router(analytics.router)
+app.include_router(reports.router)
 app.include_router(overview.router)
 app.include_router(channels.router)
 # Каналы подключаются по мере готовности. Telegram первый — раздел 7.1.
@@ -89,6 +124,42 @@ WIDGET_DIR = next(
     ),
     _BACKEND_DIR.parent / "widget",
 )
+
+# СОБРАННАЯ КОНСОЛЬ, ОТДАВАЕМАЯ ЭТИМ ЖЕ СЕРВЕРОМ.
+#
+# ЗАЧЕМ, если консоль выложена на GitHub Pages. Затем, что бесплатный
+# туннель показывает браузеру страницу-предупреждение, и на ней нет
+# CORS-заголовков: любой запрос выложенной консоли к API падает, а поток
+# ответа (EventSource) не может даже отправить заголовок для её обхода.
+# Cookie согласия здесь не спасает — для запросов с чужого домена браузер
+# её не шлёт.
+#
+# Когда консоль отдаёт сам бэкенд, адрес один: CORS не нужен вовсе,
+# предупреждение проходится один раз при открытии, поток работает.
+# GitHub Pages остаётся витриной интерфейса и рабочим вариантом на
+# постоянном адресе.
+CONSOLE_DIR = next(
+    (
+        candidate
+        for candidate in (
+            _BACKEND_DIR / "console_dist",
+            _BACKEND_DIR.parent / "console" / "dist",
+        )
+        if (candidate / "index.html").is_file()
+    ),
+    None,
+)
+
+if CONSOLE_DIR is not None:
+    # `html=True` отдаёт index.html на неизвестные пути — консоль это
+    # одностраничное приложение, и перезагрузка любого экрана должна
+    # открывать её, а не 404.
+    app.mount(
+        "/console",
+        StaticFiles(directory=CONSOLE_DIR, html=True),
+        name="console",
+    )
+
 
 if WIDGET_DIR.is_dir():
     # Загрузчик лежит по короткому адресу: он попадает в шаблон сайта
@@ -126,10 +197,3 @@ if WIDGET_DIR.is_dir():
     )
 
 
-@app.get("/health")
-async def health() -> dict:
-    return {
-        "status": "ok",
-        "workspace": settings.WORKSPACE_DEFAULT_SLUG,
-        "model": settings.SORO_MODEL,
-    }

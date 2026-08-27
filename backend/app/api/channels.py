@@ -30,8 +30,8 @@ import logging
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.analytics import CHANNELS_SQL
 from app.config import is_filled, settings
+from app.core.reports import CHANNELS_SQL, bounds, rolling_period
 from app.core.dialog import get_workspace
 from app.db import get_session
 
@@ -53,7 +53,11 @@ async def channels(session: AsyncSession = Depends(get_session)) -> dict:
     """Состояние каналов для экрана 05."""
     workspace = await get_workspace(session)
     rows = (
-        (await session.execute(CHANNELS_SQL, {"ws": workspace.id, "days": DAYS}))
+        (
+            await session.execute(
+                CHANNELS_SQL, {"ws": workspace.id, **bounds(rolling_period(DAYS))}
+            )
+        )
         .mappings()
         .all()
     )
@@ -67,7 +71,7 @@ async def channels(session: AsyncSession = Depends(get_session)) -> dict:
         "public_base_url": host if public else None,
         "channels": [
             await _telegram(counts.get("telegram", 0)),
-            _widget(counts.get("widget", 0), host, public),
+            _widget(counts.get("widget", 0), host, public, workspace.slug),
             _whatsapp(counts.get("whatsapp", 0)),
         ],
     }
@@ -140,7 +144,7 @@ async def _webhook_info() -> dict | None:
     }
 
 
-def _widget(conversations: int, host: str, public: bool) -> dict:
+def _widget(conversations: int, host: str, public: bool, slug: str) -> dict:
     return {
         "id": "widget",
         "title": "Веб-виджет",
@@ -158,14 +162,20 @@ def _widget(conversations: int, host: str, public: bool) -> dict:
         # сайта банка.
         "snippet": (
             f'<script src="{host if public else "https://<адрес-стенда>"}/w.js"\n'
-            f'  data-ws="{settings.WORKSPACE_DEFAULT_SLUG}"\n'
+            # Воркспейс ТЕКУЩИЙ, а не из .env: со сниппетом уходят на сайт
+            # заказчика, и чужой slug отправил бы его клиентов к чужим
+            # документам — ровно так виджет и писал в банк, когда на экране
+            # был открыт другой заказчик.
+            f'  data-ws="{slug}"\n'
             f'  data-lang="tg,ru"></script>'
         ),
         # На экране 05 ведём на страницу-сайт, а не на технический
         # полигон: экран показывают заказчику, и «вот так это выглядит у
         # вас» убедительнее, чем страница с намеренно ломаными стилями.
-        "site_url": f"{host}/widget/site" if public else None,
-        "demo_url": f"{host}/widget/demo" if public else None,
+        # Демо-страницы открываем с тем же воркспейсом — иначе виджет на них
+        # отвечает документами банка по умолчанию.
+        "site_url": f"{host}/widget/site?ws={slug}" if public else None,
+        "demo_url": f"{host}/widget/demo?ws={slug}" if public else None,
         "conversations": conversations,
     }
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import {
   ApiError,
   WorkspaceInfo,
@@ -18,21 +18,76 @@ import Omni from "./screens/Omni";
 import Channels from "./screens/Channels";
 import Inbox from "./screens/Inbox";
 import Analytics from "./screens/Analytics";
+import Executive from "./screens/Executive";
+import AIReports from "./screens/AIReports";
+import Security from "./screens/Security";
+import KillerDemo from "./screens/KillerDemo";
+import Offline from "./components/Offline";
 
 // Каркас консоли повторяет прототип: topbar, боковая навигация с номерами
 // экранов и футером параметров, справа — экран. Идентификаторы те же, что
 // data-go в soro-business-console-2.html.
-const SCREENS = [
-  { id: "ov", num: "01", title: "Обзор", Component: Overview },
-  { id: "kb", num: "02", title: "База знаний", Component: Knowledge },
-  { id: "pg", num: "03", title: "Площадка", Component: Playground },
-  { id: "om", num: "04", title: "Омниканальность", Component: Omni },
-  { id: "ch", num: "05", title: "Каналы", Component: Channels },
-  { id: "ib", num: "06", title: "Инбокс оператора", Component: Inbox },
-  { id: "an", num: "07", title: "Аналитика", Component: Analytics },
-] as const;
+//
+// ГРУППЫ И РЕЖИМЫ. Экранов одиннадцать, плоским списком они больше не
+// читаются: оператор и председатель правления ищут в нём разное. Поэтому
+// список разбит на три группы, а переключатель в шапке выбирает, чьими
+// глазами смотреть на стенд.
+//
+// «Операции» — работа: документы, диалоги, каналы, инбокс, техника ответов.
+// «Руководству» — смысл: сколько стоит, что ухудшилось, что делать.
+//
+// Экраны 01–07 и их номера НЕ ТРОНУТЫ: ТЗ ссылается на них номерами
+// («экран 03», «экран 06»), и переставить их — значит разойтись с
+// документом, по которому стенд принимают. Номера 08+ свободны: экраны
+// сверх ТЗ, на них документ не ссылается.
+type Mode = "ops" | "exec";
 
-function Topbar({ name }: { name: string }) {
+interface Screen {
+  id: string;
+  num: string;
+  title: string;
+  Component: React.ComponentType<{ onOpen?: (screen: string) => void }>;
+  /** В каких режимах виден. Пусто — виден всегда. */
+  modes?: Mode[];
+  group: string;
+  accent?: boolean;
+}
+
+const SCREENS: Screen[] = [
+  { id: "ov", num: "01", title: "Обзор", Component: Overview, group: "Работа" },
+  { id: "kb", num: "02", title: "База знаний", Component: Knowledge, group: "Работа", modes: ["ops"] },
+  { id: "pg", num: "03", title: "Площадка", Component: Playground, group: "Работа", modes: ["ops"] },
+  { id: "om", num: "04", title: "Омниканальность", Component: Omni, group: "Работа" },
+  { id: "ch", num: "05", title: "Каналы", Component: Channels, group: "Работа", modes: ["ops"] },
+  { id: "ib", num: "06", title: "Инбокс оператора", Component: Inbox, group: "Работа", modes: ["ops"] },
+  { id: "an", num: "07", title: "Аналитика", Component: Analytics, group: "Аналитика" },
+  // ЭКРАН «ОТЧЁТЫ» (был 08) УДАЛЁН 19.08.2026. Он спрашивал у модели цифры
+  // словами — ровно то, что теперь делает строка «Спросите Soro о бизнесе»
+  // на экране 08, причём с основаниями и источниками. Два входа в одну
+  // функцию на встрече только путали: банк спрашивал, чем они отличаются.
+  //
+  // Бэкенд `/api/reports/ask` НЕ ТРОНУТ: он живой, отвечает и покрыт
+  // тестами. Понадобится вернуть экран — он собирается обратно из истории.
+  { id: "ex", num: "08", title: "Руководству", Component: Executive, group: "Аналитика" },
+  { id: "ai", num: "09", title: "Отчёты AI", Component: AIReports, group: "Аналитика" },
+  { id: "sc", num: "10", title: "Безопасность", Component: Security, group: "Доверие" },
+  { id: "demo", num: "11", title: "Демо", Component: KillerDemo, group: "Доверие", accent: true },
+];
+
+/** Экраны текущего режима, в порядке объявления. */
+function visibleScreens(mode: Mode): Screen[] {
+  return SCREENS.filter((screen) => !screen.modes || screen.modes.includes(mode));
+}
+
+function Topbar({
+  name,
+  mode,
+  onMode,
+}: {
+  name: string;
+  mode: Mode;
+  onMode: (next: Mode) => void;
+}) {
   const { lang, setLang, t } = useLang();
   return (
     <div className="topbar">
@@ -50,6 +105,18 @@ function Topbar({ name }: { name: string }) {
       </div>
 
       <WorkspacePicker name={name} />
+
+      {/* Кому показываем стенд. Переключатель убирает из меню технические
+          экраны — руководителю незачем видеть площадку и каналы, а лишние
+          пункты на встрече превращаются в вопросы не по делу. */}
+      <div className="modetog" role="group" aria-label="Режим просмотра">
+        <button className={mode === "ops" ? "on" : ""} onClick={() => onMode("ops")}>
+          {t("Операции")}
+        </button>
+        <button className={mode === "exec" ? "on" : ""} onClick={() => onMode("exec")}>
+          {t("Руководству")}
+        </button>
+      </div>
 
       <div className="spacer" />
       <div className="demoflag">{t("демо-стенд")}</div>
@@ -183,27 +250,64 @@ function WorkspacePicker({ name }: { name: string }) {
 // от неё.
 export default function App() {
   const [current, setCurrent] = useState<string>("ov");
+  const [mode, setMode] = useState<Mode>("ops");
   const [info, setInfo] = useState<WorkspaceInfo | null>(null);
+
+  // Достучались ли до бэкенда. Отдельно от `info`, потому что `null` там
+  // бывает и в первую секунду загрузки — а плашку «сервер не отвечает»
+  // показывать в этот момент нельзя, она мигала бы при каждом переходе.
+  const [offline, setOffline] = useState(false);
 
   // Подпись в футере навигации должна отражать факт, а не эталон: там
   // зашиты «Soro-27B · FP8» и «Аудит-лог включён», а на сервере GPTQ-int4,
   // и аудит теперь выключается переключателем на экране 01.
-  useEffect(() => {
+  const loadInfo = useCallback(() => {
     getWorkspace()
-      .then(setInfo)
-      .catch(() => setInfo(null));
-  }, [current]);
+      .then((data) => {
+        setInfo(data);
+        setOffline(false);
+      })
+      .catch(() => {
+        setInfo(null);
+        setOffline(true);
+      });
+  }, []);
+
+  useEffect(() => {
+    loadInfo();
+  }, [current, loadInfo]);
+
+  // Смена режима не должна оставлять пользователя на экране, которого в
+  // новом режиме нет: иначе главная область пустеет, а меню показывает,
+  // что ничего не выбрано.
+  function switchMode(next: Mode) {
+    setMode(next);
+    const allowed = visibleScreens(next);
+    if (!allowed.some((screen) => screen.id === current)) {
+      // Руководителю открываем его дашборд, а не первый попавшийся экран.
+      setCurrent(next === "exec" ? "ex" : "ov");
+    }
+  }
 
   return (
     <div className="shell">
-      <Topbar name={info?.name ?? "…"} />
+      <Topbar name={info?.name ?? "…"} mode={mode} onMode={switchMode} />
       <div className="body">
-        <Nav current={current} onPick={setCurrent} info={info} />
+        <Nav current={current} onPick={setCurrent} info={info} mode={mode} />
 
         <main>
-          {SCREENS.map(({ id, Component }) => (
+          {/* Плашка стоит НАД экраном, а не вместо него: экран «Демо»
+              работает без сервера, и подменять его сообщением об ошибке
+              значило бы отнять у презентатора единственное, что осталось
+              рабочим, когда стенд недоступен. */}
+          {offline && <Offline onRetry={loadInfo} />}
+
+          {visibleScreens(mode).map(({ id, Component }) => (
             <section key={id} className={`screen ${id === current ? "on" : ""}`} id={id}>
-              {id === current && <Component />}
+              {/* onOpen позволяет экрану увести на другой: с дашборда — в
+                  отчёты, из финала демо — на дашборд. Без него финальная
+                  кнопка демо была бы нарисованной. */}
+              {id === current && <Component onOpen={setCurrent} />}
             </section>
           ))}
         </main>
@@ -216,10 +320,12 @@ function Nav({
   current,
   onPick,
   info,
+  mode,
 }: {
   current: string;
   onPick: (id: string) => void;
   info: WorkspaceInfo | null;
+  mode: Mode;
 }) {
   const { t } = useLang();
   const [waiting, setWaiting] = useState(0);
@@ -242,22 +348,37 @@ function Nav({
     };
   }, []);
 
+  const screens = visibleScreens(mode);
+
   return (
         <nav>
           <div className="navlbl">{t("воркспейс")}</div>
-          {SCREENS.map((s) => (
-            <button
-              key={s.id}
-              className={s.id === current ? "on" : ""}
-              onClick={() => onPick(s.id)}
-            >
-              <span className="n">{s.num}</span>
-              {t(s.title)}
-              {s.id === "ib" && waiting > 0 && (
-                <span className="navbadge">{waiting}</span>
-              )}
-            </button>
-          ))}
+          {screens.map((s, index) => {
+            // Заголовок группы печатаем перед первым её экраном: держать
+            // отдельный массив групп значит однажды забыть в нём новый
+            // экран и потерять его из меню.
+            const newGroup = index === 0 || screens[index - 1].group !== s.group;
+            return (
+              <Fragment key={s.id}>
+                {newGroup && <div className="navgroup">{t(s.group)}</div>}
+                <button
+                  className={[
+                    s.id === current ? "on" : "",
+                    s.accent ? "accent" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  onClick={() => onPick(s.id)}
+                >
+                  <span className="n">{s.num}</span>
+                  {t(s.title)}
+                  {s.id === "ib" && waiting > 0 && (
+                    <span className="navbadge">{waiting}</span>
+                  )}
+                </button>
+              </Fragment>
+            );
+          })}
           <div className="navfoot">
             {t("Модель")} <b>{info ? info.model.split("/").pop() : "…"}</b>
             <br />
@@ -267,8 +388,11 @@ function Nav({
             <b>
               {info?.security.audit_log === false ? t("выключен") : t("включён")}
             </b>
-            <br />
-            {t("Аптайм 30 дн")} <b>99,94%</b>
+            {/* «Аптайм 30 дн 99,94%» убран 19.08.2026. Число пришло из
+                эталона и было просто нарисовано: мониторинга доступности в
+                системе нет, считать аптайм не из чего. На встрече по нему
+                задают вопрос «за какой период и чем меряли» — и ответить
+                нечем. Вернём, когда появится реальная метрика. */}
           </div>
         </nav>
   );

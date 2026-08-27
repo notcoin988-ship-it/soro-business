@@ -475,3 +475,56 @@ async def test_affirmation_searches_the_offered_topic(client, knowledge, monkeyp
     )
     # ровно один новый запрос — генерация; переписыватель не звался
     assert len(server.requests) - before == 1
+
+
+async def test_affirmation_reads_on_instead_of_escalating(
+    client, knowledge, monkeypatch
+):
+    """«Бале» дочитывает документ, а не зовёт оператора.
+
+    Бот сам заканчивает ответ вопросом «хотите узнать больше?». Если на
+    «да» он отвечает «этих сведений у меня нет», он нарушает собственное
+    обещание — самое заметное для клиента место во всём диалоге. Живой
+    замер: тема набирала 0,549 при пороге 0,60, две тысячных решали.
+
+    Здесь порог поднят до недостижимого, чтобы поиск по теме заведомо
+    сорвался: проверяется именно запасной путь.
+    """
+    server = FakeSoro(
+        reply=(
+            "Фоизи солона 14,5% [1]. Оё мехоҳед дар бораи ҷуброни пеш аз "
+            "мӯҳлат маълумот гиред?"
+        )
+    ).start()
+    monkeypatch.setattr(llm.settings, "SORO_API_URL", server.base_url, raising=False)
+    try:
+        first = dict(await ask(client, "Фоизи амонат чанд аст?", thread_id="t1"))
+        # Порог поднимаем ПОСЛЕ первого ответа: он должен был состояться,
+        # иначе дочитывать будет нечего — бот ничего не процитировал.
+        monkeypatch.setattr(
+            playground.settings, "RAG_MIN_SCORE", 0.95, raising=False
+        )
+        events = dict(await ask(client, "бале", thread_id="t1"))
+    finally:
+        server.stop()
+
+    shown = first["final"]["chunks_used"]
+    assert shown, "первый ответ не сослался ни на один фрагмент"
+
+    retrieval = events["retrieval"]
+    assert retrieval["has_answer"], "согласие снова ушло оператору"
+    assert retrieval["continued"], "дочитывание не помечено для «стеклянного ящика»"
+    assert retrieval["best_score"] < retrieval["min_score"], (
+        "тест перестал проверять запасной путь: тема взяла порог сама"
+    )
+    assert not events["final"]["escalated"]
+
+    # Показываем ДРУГИЕ куски того же документа, а не пересказ прочитанного.
+    offered = [f["chunk_id"] for f in retrieval["fragments"]]
+    assert offered, "дочитывать оказалось нечего"
+    assert not set(offered) & set(shown), "подсунули клиенту уже прочитанное"
+
+
+# Случай «дочитывать нечего» проверяется в test_rag.py, а не здесь:
+# площадка работает с демо-воркспейсом, где лежат настоящие документы
+# стенда, и состав документа тесту не подконтролен.

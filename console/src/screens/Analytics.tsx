@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Analytics as Data, getAnalytics } from "../lib/api";
 import { Failed } from "../components/State";
+import { Delta } from "../components/Intel";
+import { AI_RESOLUTION_RATE, CSAT, ESCALATION_RATE, TOP_TOPICS, ru } from "../lib/intel";
 
 // Экран 07 «Аналитика».
 //
@@ -291,6 +293,119 @@ export default function Analytics() {
           </div>
         </div>
       </div>
+
+      <PeriodChange />
     </>
+  );
+}
+
+/** Сравнение с прошлым периодом и разбор по четырём срезам.
+ *
+ *  ПОЧЕМУ ЭТО ОТДЕЛЬНЫЙ БЛОК С ПОМЕТКОЙ. Всё выше на экране — живые
+ *  запросы к базе стенда. Здесь — смоделированный поток: у стенда просто
+ *  нет истории за два сравнимых периода (диалогов за 7 дней восемь), а
+ *  сравнивать 8 с 5 бессмысленно. Показываем на объёме, похожем на
+ *  банковский, и честно говорим, что это симуляция.
+ *
+ *  ЗАЧЕМ ВООБЩЕ. Абсолютное число обращений по теме ничего не значит:
+ *  «1 248 про комиссии» — много это или мало? Смысл появляется только в
+ *  сравнении с прошлой неделей, и именно изменение запускает разбор
+ *  причины. */
+function PeriodChange() {
+  const groups: { title: string; rows: { label: string; value: string; delta: number | null; goodWhenUp: boolean }[] }[] = [
+    {
+      title: "Клиенты",
+      rows: [
+        { label: "Обращений", value: "12 043", delta: 12.4, goodWhenUp: true },
+        { label: "Удовлетворённость", value: `${ru(CSAT)} / 5`, delta: 3.4, goodWhenUp: true },
+        { label: "Повторные обращения", value: "9,1%", delta: -2.6, goodWhenUp: false },
+        { label: "Нерешённые вопросы", value: "148", delta: -14.0, goodWhenUp: false },
+      ],
+    },
+    {
+      title: "Работа AI",
+      rows: [
+        { label: "Решено силами AI", value: `${ru(AI_RESOLUTION_RATE)}%`, delta: 8.1, goodWhenUp: true },
+        { label: "Передано оператору", value: `${ru(ESCALATION_RATE)}%`, delta: -8.1, goodWhenUp: false },
+        { label: "Ответы со ссылкой", value: "88%", delta: 27.0, goodWhenUp: true },
+        { label: "Средняя уверенность", value: "0,86", delta: 4.2, goodWhenUp: true },
+      ],
+    },
+    {
+      title: "Операции",
+      rows: [
+        { label: "Нагрузка на оператора", value: "34 диал./смена", delta: -11.5, goodWhenUp: false },
+        { label: "Среднее время ответа", value: "1,3 с", delta: -18.0, goodWhenUp: false },
+        { label: "Первый ответ человека", value: "2,4 мин", delta: -7.0, goodWhenUp: false },
+        { label: "Время решения", value: "11 мин", delta: 3.0, goodWhenUp: false },
+      ],
+    },
+  ];
+
+  return (
+    <div className="xsec" style={{ marginTop: 22 }}>
+      <h3>Изменение к прошлому периоду</h3>
+
+      <div className="simbar">
+        <b>Симулированный поток.</b>
+        <span>
+          Всё выше на экране — живые запросы к базе стенда. Этот блок показан на
+          смоделированном объёме: у стенда нет двух сопоставимых периодов для
+          честного сравнения.
+        </span>
+      </div>
+
+      <div className="xsec">
+        <div className="panel" style={{ marginBottom: 14 }}>
+          <h4>Темы: что выросло и что упало</h4>
+          {TOP_TOPICS.map((topic) => (
+            <div
+              key={topic.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 11,
+                padding: "8px 0",
+                borderBottom: "1px solid var(--line-soft)",
+                fontSize: 12.5,
+              }}
+            >
+              <span style={{ flex: 1 }}>{topic.title}</span>
+              <span className="mono" style={{ fontSize: 11, color: "var(--muted2)" }}>
+                {topic.conversations.toLocaleString("ru-RU")}
+              </span>
+              {/* Рост числа жалоб — плохая новость, поэтому goodWhenUp=false. */}
+              <Delta value={topic.delta} goodWhenUp={false} />
+            </div>
+          ))}
+        </div>
+
+        <div className="mgrid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(265px, 1fr))" }}>
+          {groups.map((group) => (
+            <div key={group.title} className="panel">
+              <h4>{group.title}</h4>
+              {group.rows.map((row) => (
+                <div
+                  key={row.label}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 9,
+                    padding: "7px 0",
+                    fontSize: 12,
+                  }}
+                >
+                  <span style={{ flex: 1, color: "var(--muted)" }}>{row.label}</span>
+                  <span className="mono" style={{ fontSize: 12 }}>
+                    {row.value}
+                  </span>
+                  <Delta value={row.delta} goodWhenUp={row.goodWhenUp} />
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }

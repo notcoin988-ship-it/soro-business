@@ -39,8 +39,8 @@ from fastapi import APIRouter, Header, HTTPException, Request
 
 from app.channels import widget
 from app.config import settings
-from app.core import feedback, linking
-from app.core.dialog import handle_incoming, resolve_identity
+from app.core import feedback, linking, reports
+from app.core.dialog import get_workspace, handle_incoming, resolve_identity
 from app.db import SessionLocal
 from app.models import ChannelIdentity
 
@@ -52,14 +52,36 @@ WEBHOOK_PATH = "/webhooks/telegram"
 # Приветствие на /start. Двуязычное намеренно: клиент банка в Таджикистане
 # пишет и по-таджикски, и по-русски, и заранее неизвестно, как начнёт.
 GREETING = (
-    "Салом! Ман боти Бонки Эсхата. Аз рӯи ҳуҷҷатҳои бонк ҷавоб медиҳам.\n"
-    "Здравствуйте! Я бот Банка Эсхата, отвечаю по документам банка.\n\n"
+    "Салом! Ман боти бонки ДЕМО. Аз рӯи ҳуҷҷатҳои бонк ҷавоб медиҳам.\n"
+    "Здравствуйте! Я бот ДЕМО банка, отвечаю по документам банка.\n\n"
     "Саволатонро нависед — напишите ваш вопрос."
 )
 
 NON_TEXT_REPLY = (
     "Ман ҳоло танҳо матнро мефаҳмам. Лутфан саволатонро нависед.\n"
     "Пока я понимаю только текст — напишите вопрос словами."
+)
+
+# --- отчёты руководителю ---------------------------------------------------
+
+REPORT_COMMAND = "/report"
+
+# `/report` без периода: неделя — то же окно, что на экранах 01 и 07.
+REPORT_DEFAULT_ASK = "отчёт за эту неделю"
+
+# Отказ показывает id намеренно: он свой собственный, узнать его иначе —
+# отдельный квест, а без него администратору стенда нечего вписать в .env.
+# Цифр в отказе нет, поэтому он ничего не раскрывает.
+REPORT_DENIED = (
+    "Ҳисоботи таҳлилӣ танҳо барои роҳбарияти бонк дастрас аст.\n"
+    "Аналитика доступна только руководству банка.\n\n"
+    "Ваш Telegram ID: {user_id}\n"
+    "Передайте его администратору стенда — он добавит вас в OWNER_TELEGRAM_IDS."
+)
+
+REPORT_FAILED = (
+    "Ҳисобот ҷамъ нашуд — хатои дохилӣ.\n"
+    "Не удалось собрать отчёт: внутренняя ошибка. Попробуйте ещё раз."
 )
 
 router = APIRouter(tags=["telegram"])
@@ -202,6 +224,32 @@ async def link_from_widget(token: str, message: Message) -> bool:
     return True
 
 
+async def report_for(question: str, external_id: str) -> str:
+    """Отчёт руководителю: тот же `core.reports`, что у экрана 08.
+
+    Доступ проверяет вызывающий. Здесь — только сборка и оформление под
+    Telegram: разметку бот не поддерживает (`parse_mode=None`), поэтому
+    текст уходит как есть, а оговорка про период — отдельным абзацем
+    сверху, чтобы её нельзя было не прочитать.
+    """
+    try:
+        async with SessionLocal() as session:
+            workspace = await get_workspace(session)
+            report = await reports.build(
+                session,
+                question,
+                workspace=workspace,
+                channel=CHANNEL,
+                requested_by=external_id,
+            )
+            await session.commit()
+    except Exception:  # noqa: BLE001 — руководитель не должен видеть трейсбек
+        log.exception("не удалось собрать отчёт по запросу %r", question)
+        return REPORT_FAILED
+
+    return "\n\n".join([*report.warnings, report.text])
+
+
 async def answer_for(message: Message) -> str | None:
     """Что ответить на сообщение. Отдельно от отправки — чтобы тестировать
     без сети и без Telegram.
@@ -210,6 +258,8 @@ async def answer_for(message: Message) -> str | None:
     """
     if message.text is None:
         return NON_TEXT_REPLY
+
+    external_id = str(message.from_user.id)
 
     if message.text.startswith("/start"):
         # Хвост после /start — это link_token из виджета (раздел 5.1):
@@ -220,11 +270,34 @@ async def answer_for(message: Message) -> str | None:
             await link_from_widget(token, message)
         return GREETING
 
+    # --- отчёт руководителю банка ---
+    #
+    # Один бот обслуживает и клиентов, и руководство, поэтому признака два:
+    # КТО пишет (список id в `.env`) и ПРО ЧТО (слова «отчёт», «аналитика»,
+    # «ҳисобот» — `reports.looks_like_report_request`).
+    #
+    # Команда `/report` работает и без слов-признаков: руководитель, который
+    # не помнит формулировок, пишет «/report за июнь». Не из списка — вежливый
+    # отказ вместе с его же id: иначе непонятно, что вписывать в .env.
+    if message.text.startswith(REPORT_COMMAND):
+        if not reports.is_owner(external_id):
+            return REPORT_DENIED.format(user_id=external_id)
+        question = message.text[len(REPORT_COMMAND) :].strip() or REPORT_DEFAULT_ASK
+        return await report_for(question, external_id)
+
+    # Просьба словами — только для тех, кто в списке. Для остальных это
+    # обычный вопрос клиента: молча уходит в базу знаний, и о существовании
+    # отчётов они не узнают.
+    if reports.is_owner(external_id) and reports.looks_like_report_request(
+        message.text
+    ):
+        return await report_for(message.text, external_id)
+
     async with SessionLocal() as session:
         reply = await handle_incoming(
             session,
             channel=CHANNEL,
-            external_id=str(message.from_user.id),
+            external_id=external_id,
             text=message.text,
             display_name=display_name(message),
         )

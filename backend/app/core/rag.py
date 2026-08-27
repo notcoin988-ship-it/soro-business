@@ -26,11 +26,14 @@ RRF годится только для сортировки: его значен
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
 from dataclasses import dataclass
 
 import httpx
+from redis import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -136,6 +139,11 @@ class RagResult:
     best_score: float
     # какой шкалой мерили: нужно телеметрии и подписи на «Площадке»
     reranked: bool = False
+    # Фрагменты добраны из документа, который клиенту УЖЕ цитировали, а не
+    # взяты по порогу (`more_from_documents`). Тогда `has_answer` истинно
+    # при `best_score` НИЖЕ порога, и «стеклянный ящик» обязан объяснить,
+    # почему: иначе экран 03 выглядит сломанным.
+    continued: bool = False
 
 
 def build_tsquery(question: str) -> str:
@@ -170,6 +178,7 @@ SEARCH_SQL = text(
                ) AS rank
         FROM chunks
         WHERE workspace_id = :ws
+          AND NOT (id = ANY(CAST(:exclude AS bigint[])))
         ORDER BY embedding <=> CAST(:qvec AS vector)
         LIMIT :top_k
     ),
@@ -179,6 +188,7 @@ SEARCH_SQL = text(
         FROM chunks c, to_tsquery('simple', :tsq) AS q(query)
         WHERE :has_text
           AND c.workspace_id = :ws
+          AND NOT (c.id = ANY(CAST(:exclude AS bigint[])))
           AND c.tsv @@ q.query
         ORDER BY ts_rank(c.tsv, q.query) DESC
         LIMIT :top_k
@@ -216,6 +226,10 @@ async def embed_query(question: str) -> list[float]:
     bge-m3 не требует приставки вроде «query: » — модель обучена без
     инструкций, и добавление префикса только сместило бы вектор.
     """
+    cached = _cache_get(question)
+    if cached is not None:
+        return cached
+
     url = settings.EMBEDDINGS_URL.rstrip("/") + "/embed"
     async with httpx.AsyncClient(timeout=QUERY_TIMEOUT) as client:
         response = await client.post(url, json={"inputs": [question]})
@@ -228,7 +242,67 @@ async def embed_query(question: str) -> list[float]:
             f"модель вернула вектор размерности {len(vector)}, "
             f"а в схеме {settings.EMBEDDINGS_DIM} — проверьте EMBEDDINGS_URL"
         )
+    _cache_put(question, vector)
     return vector
+
+
+# --- кеш векторов вопросов --------------------------------------------------
+#
+# ЗАЧЕМ. Эмбеддинг считается на CPU 3–4 секунды и занимает больше половины
+# времени ответа (замер в DEPLOY.md: одиночный вопрос 5,2 с). При этом на
+# демо и в поддержке вопросы повторяются: «фоизи амонат», «режим работы»,
+# «как оформить карту» — их задаёт каждый второй.
+#
+# ЧТО КЕШИРУЕМ. Только вопрос клиента, не документы: у чанков вектор уже
+# лежит в базе. Ключ — хеш текста и имени модели: сменится модель —
+# сменятся все ключи, и старые векторы (другой размерности!) не всплывут.
+#
+# ПОЧЕМУ ЭТО БЕЗОПАСНО. Вектор — детерминированная функция текста: та же
+# модель на том же тексте даёт то же самое. Кеш не меняет ответы, только
+# убирает повторный счёт.
+#
+# ЧЕГО В КЕШЕ НЕТ: самого текста вопроса. В ключе только хеш, в значении
+# только числа — заглянувший в Redis не прочитает, о чём спрашивали
+# клиенты банка.
+CACHE_PREFIX = "emb:"
+
+# Сутки. Дольше нет смысла: за сутки демо-стенд успевает поменять базу
+# знаний, а вектор вопроса от неё не зависит — но и держать мусор от
+# случайных вопросов неделями незачем.
+CACHE_TTL = 24 * 60 * 60
+
+
+def _cache_key(question: str) -> str:
+    digest = hashlib.sha256(
+        f"{settings.SORO_MODEL}|{question}".encode()
+    ).hexdigest()
+    return CACHE_PREFIX + digest[:32]
+
+
+def _cache_get(question: str) -> list[float] | None:
+    try:
+        raw = Redis.from_url(settings.REDIS_URL).get(_cache_key(question))
+    except Exception as exc:  # noqa: BLE001 — кеш не повод не отвечать
+        log.warning("кеш векторов недоступен (%s)", exc)
+        return None
+    if raw is None:
+        return None
+    try:
+        vector = json.loads(raw)
+    except ValueError:
+        return None
+    # Размерность проверяем и на выходе из кеша: в Redis мог остаться
+    # вектор от другой модели, если имя модели поменяли, не поменяв ключ.
+    return vector if len(vector) == settings.EMBEDDINGS_DIM else None
+
+
+def _cache_put(question: str, vector: list[float]) -> None:
+    try:
+        Redis.from_url(settings.REDIS_URL).setex(
+            _cache_key(question), CACHE_TTL, json.dumps(vector)
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("кеш векторов не пишется (%s)", exc)
 
 
 async def rerank(question: str, hits: list[Hit]) -> list[Hit] | None:
@@ -306,12 +380,18 @@ async def search(
     top_k: int | None = None,
     return_k: int | None = None,
     min_score: float | None = None,
+    exclude_ids: list[int] | None = None,
 ) -> RagResult:
     """Гибридный поиск по базе знаний одного воркспейса.
 
     Пороги вынесены в параметры не ради гибкости, а ради `eval_rag.py`:
     калибровка порога в диапазоне 0,60–0,72 (раздел 3.2) должна гоняться
     без перезапуска бэкенда.
+
+    `exclude_ids` — фрагменты, которые клиенту уже показывали. Нужны для
+    согласия: «бале» на «хотите узнать больше?» означает БОЛЬШЕ, а не то
+    же самое. Без этого поиск честно приносил те же чанки, модель
+    пересказывала свой прошлый ответ, и разговор ходил по кругу.
     """
     top_k = top_k if top_k is not None else settings.RAG_TOP_K
     return_k = return_k if return_k is not None else settings.RAG_RETURN_K
@@ -354,6 +434,9 @@ async def search(
                 # работы. Без переранкера берём как раньше.
                 "return_k": top_k if settings.RERANKER_URL else return_k,
                 "rrf_k": RRF_K,
+                # Пустой массив вместо NULL: `id = ANY(NULL)` даёт NULL,
+                # а не FALSE, и запрос вернул бы пусто на каждом вопросе.
+                "exclude": list(exclude_ids or []),
             },
         )
     ).mappings().all()
@@ -399,3 +482,101 @@ async def search(
         best_score=best_score,
         reranked=reranked,
     )
+
+
+# Продолжение уже начатого рассказа: остальные куски ТОГО ЖЕ документа.
+#
+# Порог здесь не применяется намеренно — см. `more_from_documents`. Чтобы
+# это не стало лазейкой для выдумки, документы берутся не любые, а ровно
+# те, из которых бот только что процитировал ответ.
+CONTINUE_SQL = text(
+    """
+    SELECT c.id            AS chunk_id,
+           c.document_id   AS document_id,
+           d.title         AS title,
+           c.page          AS page,
+           d.source_url    AS source_url,
+           c.text          AS text,
+           1 - (c.embedding <=> CAST(:qvec AS vector)) AS score
+    FROM chunks c
+    JOIN documents d ON d.id = c.document_id
+    WHERE c.workspace_id = :ws
+      AND c.document_id IN (
+          SELECT document_id FROM chunks
+          WHERE id = ANY(CAST(:seen AS bigint[]))
+            AND workspace_id = :ws
+      )
+      AND NOT (c.id = ANY(CAST(:seen AS bigint[])))
+    ORDER BY c.embedding <=> CAST(:qvec AS vector)
+    LIMIT :limit
+    """
+)
+
+
+async def more_from_documents(
+    session: AsyncSession,
+    workspace_id: int,
+    seen_chunk_ids: list[int],
+    topic: str,
+    *,
+    limit: int | None = None,
+) -> list[Hit]:
+    """Ещё фрагменты из документов, которые клиенту уже цитировали.
+
+    ЗАЧЕМ. Бот сам заканчивает ответ вопросом «хотите узнать больше?»
+    (правило 7 промпта), клиент отвечает «да» — и получал эскалацию.
+    Замер 14.08.2026 на боевой базе, вопрос про срочный депозит:
+
+        тема «срочные депозиты»                        0,598
+        она же без уже показанного клиенту фрагмента   0,549
+        порог                                          0,600
+
+    Две тысячных, и бот нарушает собственное обещание. Поднимать ради
+    этого порог нельзя — он держит всю защиту от выдумок; трогать его
+    здесь означало бы чинить одно место ценой всех остальных.
+
+    Поэтому на согласии мы не ищем заново, а ДОЧИТЫВАЕМ: берём остальные
+    куски того же документа, из которого только что отвечали. Выдумать
+    оттуда нечего — это ровно тот источник, на который бот уже сослался,
+    а клиент попросил из него продолжения. В примере выше документ 3710
+    отдаёт ставки, доход по вкладу и страхование вклада, то есть буквально
+    «больше о срочных депозитах».
+
+    Порядок — по близости к теме, а не по номеру куска: клиент попросил
+    про депозиты, а не «читай документ подряд с того места, где кончил».
+
+    Пустой список означает «продолжать нечем»: документ был одностраничным
+    или клиент уже прочитал его целиком. Вызывающий тогда эскалирует, как
+    и раньше.
+    """
+    if not seen_chunk_ids:
+        return []
+
+    vector = await embed_query(topic)
+    rows = (
+        await session.execute(
+            CONTINUE_SQL,
+            {
+                "qvec": "[" + ",".join(repr(float(x)) for x in vector) + "]",
+                "ws": workspace_id,
+                "seen": list(seen_chunk_ids),
+                "limit": limit or settings.RAG_RETURN_K,
+            },
+        )
+    ).mappings().all()
+
+    return [
+        Hit(
+            chunk_id=row["chunk_id"],
+            document_id=row["document_id"],
+            title=row["title"],
+            page=row["page"],
+            source_url=row["source_url"],
+            text=row["text"],
+            score=float(row["score"]),
+            # Слияния двух веток здесь не было, сливать нечего: RRF имел бы
+            # смысл только рядом с полнотекстовым поиском.
+            rrf=0.0,
+        )
+        for row in rows
+    ]

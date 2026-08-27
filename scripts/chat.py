@@ -135,7 +135,7 @@ async def ensure_workspace(session) -> Workspace:
         select(Workspace).where(Workspace.slug == WORKSPACE)
     )
     if workspace is None:
-        workspace = Workspace(slug=WORKSPACE, name="Банк Эсхата")
+        workspace = Workspace(slug=WORKSPACE, name="ДЕМО банк")
         session.add(workspace)
         await session.commit()
         print(f"{GREY}воркспейс {WORKSPACE} создан{OFF}")

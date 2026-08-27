@@ -53,9 +53,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core import audit, context, llm, policy
 from app.core.dialog import (
-    NO_ANSWER_REPLY,
-    REPEAT_REPLY,
+    NO_ANSWER_REPLIES,
+    REPEAT_REPLIES,
     get_workspace,
+    in_language,
     search_in_context,
     smalltalk_reply,
 )
@@ -141,7 +142,12 @@ def _history(thread_id: str | None) -> list[context.Turn]:
     return list(thread.turns) if thread else []
 
 
-def _remember(thread_id: str | None, question: str, answer: str) -> None:
+def _remember(
+    thread_id: str | None,
+    question: str,
+    answer: str,
+    chunks: list[int] | None = None,
+) -> None:
     """Дописать обмен в историю ветки.
 
     Записываем ВОПРОС КАК ЕГО НАПИСАЛ ЧЕЛОВЕК, а не переписанный поиском:
@@ -159,7 +165,7 @@ def _remember(thread_id: str | None, question: str, answer: str) -> None:
 
     thread = _threads.setdefault(thread_id, Thread())
     thread.turns.append(context.Turn("user", question))
-    thread.turns.append(context.Turn("assistant", answer))
+    thread.turns.append(context.Turn("assistant", answer, tuple(chunks or ())))
     # Храним чуть больше, чем уйдёт в промпт: `context.trim` сам возьмёт
     # сколько нужно, а запас позволит когда-нибудь показать ветку целиком.
     thread.turns = thread.turns[-2 * context.HISTORY_TURNS :]
@@ -262,6 +268,11 @@ async def stream(
                     "has_answer": found.has_answer,
                     "best_score": round(found.best_score, 3),
                     "min_score": settings.RAG_MIN_SCORE,
+                    # Фрагменты дочитаны из уже процитированного документа
+                    # по согласию клиента — тогда `has_answer` истинно при
+                    # оценке НИЖЕ порога, и без этого признака экран
+                    # выглядит сломанным. См. `rag.more_from_documents`.
+                    "continued": found.continued,
                     "search_ms": search_ms,
                     "fragments": [
                         {
@@ -286,7 +297,11 @@ async def stream(
                 # следующего вопроса важно, что бот НЕ ответил. Иначе
                 # модель, увидев пустую реплику, решит, что ответила, и
                 # начнёт ссылаться на несказанное.
-                _remember(pending.thread_id, pending.question, NO_ANSWER_REPLY)
+                _remember(
+                    pending.thread_id,
+                    pending.question,
+                    in_language(NO_ANSWER_REPLIES, pending.question),
+                )
                 yield sse(
                     "final",
                     {
@@ -306,22 +321,47 @@ async def stream(
 
             generation_started = time.monotonic()
             pieces: list[str] = []
+            # `pieces` копит СЫРОЙ ответ — по нему считаются маркер и
+            # ссылки. На экран уходит очищенный поток: `split_visible`
+            # придерживает хвост, который ещё может стать `[ESCALATE]`.
+            held = ""
             async for piece in llm.stream_answer(
                 question, found.hits, bank_name=workspace.name, history=history
             ):
                 pieces.append(piece)
-                yield sse("delta", {"text": piece})
+                shown, held = llm.split_visible(held + piece)
+                if shown:
+                    yield sse("delta", {"text": shown})
+            # Хвост так и не стал маркером — это обычный текст, отдаём.
+            if held and not llm.ESCALATE_RE.fullmatch(held):
+                yield sse("delta", {"text": held})
 
             raw = "".join(pieces)
             text, escalated, reason = llm.parse_answer(raw, found.hits, question)
             chunks_used = llm.cited_chunk_ids(text, found.hits)
+
+            # Тот же инвариант, что в `llm.answer`: ответ без единой буквы
+            # (один маркер, одна ссылка, пустота) — не ответ. Площадка
+            # зовёт `stream_answer` напрямую, поэтому проверку приходится
+            # повторять здесь; без неё `final` приходил с пустым текстом и
+            # на экране оставался сырой `[ESCALATE]`.
+            if not llm.LETTERS_RE.search(llm.CITE_RE.sub("", text)):
+                text = llm.EMPTY_ANSWER_REPLY
+                escalated = True
+                reason = (
+                    llm.REASON_PII_TOPIC
+                    if llm.pii_topic(pending.question)
+                    else llm.REASON_NO_ANSWER
+                )
+                chunks_used = []
 
             if context.is_repeat(text, history, question):
                 # Модель пересказала свой прошлый ответ — нового во
                 # фрагментах нет. Куски уже ушли в поток, и `final` их
                 # заменит: на экране это заметно, но честнее, чем в
                 # третий раз показать клиенту тот же абзац.
-                text, escalated, reason = REPEAT_REPLY, True, llm.REASON_NO_ANSWER
+                text = in_language(REPEAT_REPLIES, pending.question)
+                escalated, reason = True, llm.REASON_NO_ANSWER
                 chunks_used = []
 
             if not policy.enabled(workspace, policy.CITE_SOURCES):
@@ -347,7 +387,7 @@ async def stream(
             # транзакции, и коммитить там будет вызывающий.
             await session.commit()
 
-            _remember(pending.thread_id, pending.question, text)
+            _remember(pending.thread_id, pending.question, text, chunks_used)
 
             yield sse(
                 "final",

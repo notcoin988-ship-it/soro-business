@@ -26,6 +26,30 @@
     localStorage.setItem("soro_uid", uid);
   }
 
+  // Название компании в шапке. В разметке стоит запасное значение, но
+  // виджет обслуживает несколько заказчиков сразу, и зашитое имя показывало
+  // чужое: клиент страховой видел в шапке банк. Спрашиваем настоящее по
+  // тому же `ws`, с которым работаем.
+  var who = document.querySelector(".who");
+  if (who && ws) {
+    fetch("/api/workspace?ws=" + encodeURIComponent(ws), {
+      headers: { "ngrok-skip-browser-warning": "1" },
+    })
+      .then(function (response) {
+        return response.ok ? response.json() : null;
+      })
+      .then(function (data) {
+        if (!data || !data.name) return;
+        // Подпись под именем оставляем — меняем только сам заголовок.
+        var note = who.querySelector("small");
+        who.textContent = data.name;
+        if (note) who.appendChild(note);
+      })
+      .catch(function () {
+        // Имя — украшение шапки: не ответило, остаётся запасное из разметки.
+      });
+  }
+
   var log = document.getElementById("log");
   var input = document.getElementById("text");
   var send = document.getElementById("send");

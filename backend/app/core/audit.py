@@ -35,6 +35,10 @@ log = logging.getLogger(__name__)
 EVENT_LLM_CALL = "llm_call"
 EVENT_ESCALATION = "escalation"
 EVENT_DOC_ADD = "doc_add"
+# Сверх списка DDL: кто и за какой период выгружал цифры банка (экран 08 и
+# та же просьба в Telegram). Событий три в комментарии схемы, но отчёт —
+# ровно тот случай, о котором через год спросят «кто это смотрел».
+EVENT_REPORT = "report"
 
 
 async def record(

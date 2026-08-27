@@ -226,7 +226,22 @@ export default function Knowledge() {
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
-  const { files, sites } = useMemo(() => split(docs ?? []), [docs]);
+  // Поиск по базе. На демо-стенде документов сотня, у банка их будут
+  // тысячи, и без строки поиска экран превращается в бесконечную таблицу,
+  // по которой невозможно проверить «а загружены ли тарифы».
+  const [query, setQuery] = useState("");
+
+  const found = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle || docs === null) return docs ?? [];
+    return docs.filter(
+      (doc) =>
+        doc.title.toLowerCase().includes(needle) ||
+        (doc.source_url ?? "").toLowerCase().includes(needle),
+    );
+  }, [docs, query]);
+
+  const { files, sites } = useMemo(() => split(found), [found]);
 
   const refresh = useCallback(async () => {
     try {
@@ -402,6 +417,34 @@ export default function Knowledge() {
               Обойти сайт
             </button>
           </form>
+        </div>
+      </div>
+
+      {/* Строка поиска стоит НАД таблицей и всегда видна: искать документ
+          прокруткой в тысяче строк невозможно, а именно этот вопрос —
+          «а такой-то регламент у вас загружен?» — задают на встрече. */}
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            className="text"
+            style={{ flex: 1, minWidth: 240 }}
+            placeholder="Поиск по названию документа или адресу страницы"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            aria-label="Поиск по базе знаний"
+          />
+          {query && (
+            <button className="btn" onClick={() => setQuery("")}>
+              Сбросить
+            </button>
+          )}
+          <span className="mono" style={{ fontSize: 11, color: "var(--muted2)" }}>
+            {docs === null
+              ? "…"
+              : query
+                ? `найдено ${found.length} из ${docs.length}`
+                : `${docs.length} источников`}
+          </span>
         </div>
       </div>
 

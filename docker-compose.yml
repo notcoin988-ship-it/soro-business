@@ -63,6 +63,9 @@ services:
       # Файлы виджета (раздел 7.2): бэкенд отдаёт loader.js по /w.js и
       # содержимое iframe по /widget/frame. Отдельного CDN у демо нет.
       - "./widget:/code/widget"
+      # Собранная консоль: бэкенд отдаёт её по /console, чтобы фронт и API
+      # жили на одном адресе — см. комментарий к CONSOLE_DIR в main.py.
+      - "./console/dist:/code/console_dist"
       - "uploads:/data/uploads"
 
   worker:

@@ -3,7 +3,10 @@
 Ни одного секрета в коде — правило 10.1: секрет в git это инцидент.
 """
 
+import logging
+import os
 import re
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -23,6 +26,45 @@ def is_filled(value: str | None) -> bool:
     if not value or value.endswith("..."):
         return False
     return not _PLACEHOLDER_RE.search(value)
+
+
+# --- секреты из файлов -----------------------------------------------------
+#
+# `.env` рядом с кодом — нормально для стенда и плохо для прода: файл
+# лежит на диске целиком, попадает в резервные копии образа и однажды
+# уезжает в git (инцидент с `.env.backup` в истории проекта уже был).
+#
+# Поэтому любой секрет можно задать файлом: `SORO_API_KEY_FILE=/run/secrets/soro`.
+# Так работают docker secrets и почти все хранилища — они кладут значение
+# в файл и монтируют его в контейнер. Значение из файла ПЕРЕВЕШИВАЕТ
+# переменную: если задано и то, и другое, значит `.env` устарел.
+_SECRETS = (
+    "SORO_API_KEY",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_WEBHOOK_SECRET",
+    "WHATSAPP_TOKEN",
+    "CONSOLE_PASSWORD",
+    "DATABASE_URL",
+)
+
+
+def _read_secret_files() -> None:
+    """Подставить в окружение секреты, заданные файлами."""
+    for name in _SECRETS:
+        path = os.environ.get(f"{name}_FILE")
+        if not path:
+            continue
+        try:
+            os.environ[name] = Path(path).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            # Молчать нельзя: приложение поднимется с пустым секретом и
+            # сломается позже и непонятнее — например, «бот не отвечает».
+            logging.getLogger(__name__).error(
+                "секрет %s не прочитан из %s: %s", name, path, exc
+            )
+
+
+_read_secret_files()
 
 
 class Settings(BaseSettings):
@@ -98,6 +140,12 @@ class Settings(BaseSettings):
     # (`t.me/<имя>?start=<link_token>`). Токен бота его не содержит, а
     # спрашивать getMe на каждую кнопку — лишний поход в сеть.
     TELEGRAM_BOT_USERNAME: str = "EskhataDemoBot"
+    # Кому в Telegram доступны цифры банка (экран 08 тем же ботом) —
+    # telegram user id через запятую. Бот публичный: без этого списка любой
+    # клиент, написавший «дай статистику», получил бы обороты банка.
+    # Пусто = отчётов в Telegram нет ни у кого; так безопаснее по умолчанию.
+    # Свой id виден по команде /report — бот отвечает им отказом.
+    OWNER_TELEGRAM_IDS: str = ""
     WHATSAPP_TOKEN: str = ""
     WHATSAPP_PHONE_ID: str = ""
     WHATSAPP_VERIFY_TOKEN: str = ""
@@ -120,6 +168,18 @@ class Settings(BaseSettings):
 
     # --- прочее ---
     PUBLIC_BASE_URL: str = "http://localhost:8000"
+
+    # Откуда фронтенду разрешено ходить в это API.
+    #
+    # ЗАЧЕМ. Консоль в разработке живёт на 5173 и ходит через прокси Vite,
+    # то есть с точки зрения браузера — на свой же адрес, и CORS не нужен.
+    # Но если консоль выложена отдельно (GitHub Pages, статика на другом
+    # домене), а бэкенд остаётся здесь — браузер заблокирует все запросы,
+    # пока сервер не разрешит источник явно.
+    #
+    # Список через запятую. Пусто — CORS выключен, как было раньше.
+    # Звёздочку не ставим по умолчанию: API отдаёт диалоги клиентов банка.
+    CORS_ORIGINS: str = ""
     CONSOLE_LOGIN: str = "admin"
     CONSOLE_PASSWORD: str = ""
     WORKSPACE_DEFAULT_SLUG: str = "eskhata-demo"

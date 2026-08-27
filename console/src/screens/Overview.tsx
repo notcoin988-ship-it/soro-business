@@ -81,6 +81,9 @@ function seconds(ms: number): string {
 
 export default function Overview() {
   const [security, setState] = useState<Security | null>(null);
+  // Имя банка приходит из воркспейса, а не зашито в разметку: в эталоне
+  // банк был один, а переключатель на верхней панели заводит новые.
+  const [wsName, setWsName] = useState("");
   const [overview, setOverview] = useState<OverviewData | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -88,7 +91,10 @@ export default function Overview() {
 
   useEffect(() => {
     getWorkspace()
-      .then((info) => setState(info.security))
+      .then((info) => {
+        setState(info.security);
+        setWsName(info.name);
+      })
       .catch(() => setError("Не удалось прочитать настройки воркспейса"));
     getOverview()
       .then(setOverview)
@@ -131,7 +137,7 @@ export default function Overview() {
       <div className="head">
         <div>
           <h1>
-            Банк Эсхата — <em>демо-воркспейс</em>
+            {wsName || "…"} — <em>демо-воркспейс</em>
           </h1>
           <p>
             Изолированное пространство банка: свои документы, свои каналы, свой

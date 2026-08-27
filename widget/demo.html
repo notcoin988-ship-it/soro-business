@@ -60,6 +60,20 @@
 <!-- Тот самый сниппет, который банк вставляет к себе. Адрес относительный:
      страницу отдаёт тот же бэкенд, что и виджет. В консоли на экране 05
      показывается абсолютный — его копируют в чужой шаблон. -->
-<script src="/w.js" data-ws="eskhata-demo" data-lang="tg,ru"></script>
+<!-- Воркспейс берётся из адреса страницы: `?ws=trud-demo`.
+     ЗАЧЕМ. Раньше здесь был зашит `eskhata-demo`, и демо-страница всегда
+     писала в банк — даже когда в консоли открыт другой заказчик. На показе
+     это выглядит так, будто виджет отвечает чужими документами.
+     Без параметра остаётся прежнее поведение: воркспейс по умолчанию. -->
+<script>
+  (function () {
+    var ws = new URLSearchParams(location.search).get("ws") || "eskhata-demo";
+    var tag = document.createElement("script");
+    tag.src = "/w.js";
+    tag.setAttribute("data-ws", ws);
+    tag.setAttribute("data-lang", "tg,ru");
+    document.body.appendChild(tag);
+  })();
+</script>
 </body>
 </html>

@@ -39,6 +39,23 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def do_GET(self):
+        """`GET /v1/models` — как у vLLM.
+
+        Нужен не для ответов, а для проверки здоровья (`/health/ready`) и
+        для чек-листа раздела 1.3 ТЗ: оба спрашивают список моделей.
+        Заглушка, не умеющая того, что умеет боевой сервер, даёт ложную
+        тревогу — а сторож, который «иногда врёт», перестают читать.
+        """
+        body = json.dumps(
+            {"object": "list", "data": [{"id": "soro-27b-fp8", "object": "model"}]}
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_POST(self):
         self.rfile.read(int(self.headers.get("Content-Length", 0)))
         self.send_response(200)

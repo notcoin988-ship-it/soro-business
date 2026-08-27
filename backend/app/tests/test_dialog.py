@@ -15,7 +15,13 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import func, select
 
-from app.core.dialog import NO_ANSWER_REPLY, handle_incoming, wants_operator
+from app.core import dialog, phrases
+from app.core.dialog import (
+    NO_ANSWER_REPLIES,
+    handle_incoming,
+    in_language,
+    wants_operator,
+)
 from app.models import ChannelIdentity, Contact, Conversation, Message
 
 WS = "test-ws"
@@ -193,6 +199,48 @@ async def test_question_with_greeting_is_not_smalltalk(session, workspace):
     assert reply.escalated
 
 
+@pytest.mark.parametrize(
+    "text, language",
+    [
+        ("салом", "tg"),
+        ("привет", "ru"),
+        ("здравствуйте", "ru"),
+        ("раҳмат", "tg"),
+        ("спасибо", "ru"),
+        ("хайр", "tg"),
+        ("пока", "ru"),
+    ],
+)
+async def test_canned_replies_speak_one_language(session, workspace, text, language):
+    """Готовые фразы — на языке клиента, а не обе разом.
+
+    Двуязычная склейка была самым заметным «я машина» во всём диалоге:
+    живой оператор не отвечает дважды. Язык считает
+    `phrases.detect_language`.
+    """
+    reply = await send(session, text)
+
+    other = "ru" if language == "tg" else "tg"
+    assert reply.text == dialog.REPLIES[phrases.is_smalltalk(text)][language]
+    assert dialog.REPLIES[phrases.is_smalltalk(text)][other] not in reply.text
+
+
+@pytest.mark.parametrize("text", ["hello", "hi", "мерси"])
+async def test_canned_replies_stay_bilingual_when_language_is_unclear(
+    session, workspace, text
+):
+    """Язык не определён — отвечаем на обоих, и это не полумера.
+
+    «hello» не говорит о клиенте ничего: угадать здесь значит с равной
+    вероятностью заговорить не на его языке.
+    """
+    reply = await send(session, text)
+    kind = phrases.is_smalltalk(text)
+
+    assert dialog.REPLIES[kind]["tg"] in reply.text
+    assert dialog.REPLIES[kind]["ru"] in reply.text
+
+
 async def test_greeting_can_be_overridden_by_workspace(session, workspace):
     """Приветствие берётся из настроек воркспейса (раздел 7.1)."""
     workspace.settings = {"greeting": "Хуш омадед ба бонки мо!"}
@@ -207,9 +255,12 @@ async def test_empty_knowledge_base_escalates(session, workspace):
 
     Ровно этого требует раздел 3.2: лучше лишняя эскалация, чем выдумка.
     """
-    reply = await send(session, "Фоизи амонат чанд аст?")
+    question = "Фоизи амонат чанд аст?"
+    reply = await send(session, question)
 
-    assert reply.text == NO_ANSWER_REPLY
+    # вопрос таджикский — и фраза об эскалации обязана быть таджикской
+    assert reply.text == NO_ANSWER_REPLIES["tg"]
+    assert reply.text == in_language(NO_ANSWER_REPLIES, question)
     assert reply.escalated
     assert reply.reason == "no_answer"
     assert reply.chunks_used == []

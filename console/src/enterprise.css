@@ -1,0 +1,775 @@
+/* СТИЛИ МОДУЛЕЙ AI-АНАЛИТИКИ: Executive, отчёты AI, безопасность,
+   Killer Demo и улучшения существующих экранов.
+
+   ПОЧЕМУ ОТДЕЛЬНЫЙ ФАЙЛ. `prototype.css` — эталон, он не редактируется
+   (см. шапку того файла). `theme.css` — мелкие добавки к эталонным
+   экранам. Здесь — новые модули, которых в прототипе не было вовсе.
+
+   ПАЛИТРА НЕ МЕНЯЕТСЯ. Переменные те же: --rose, --brass, --panel, --line.
+   Enterprise-вид набирается не новыми цветами, а плотностью сетки,
+   спокойной типографикой и одинаковыми отступами — иначе стенд перестанет
+   выглядеть одним продуктом. */
+
+/* ============ общие детали ============ */
+
+/* Заголовок раздела: над каждым новым экраном. Повторяет ритм .head из
+   эталона, но с местом под правый блок действий. */
+.xhead {
+  display: flex; align-items: flex-end; gap: 18px;
+  margin-bottom: 18px; flex-wrap: wrap;
+}
+.xhead .xh-main { flex: 1 1 420px; min-width: 0; }
+.xhead h1 {
+  margin: 0 0 7px; font-family: 'Unbounded', sans-serif;
+  font-size: 25px; font-weight: 500; letter-spacing: -.01em;
+}
+.xhead h1 em { color: var(--rose-hi); font-style: normal; }
+.xhead p {
+  margin: 0; max-width: 660px; font-size: 12.5px;
+  line-height: 1.65; color: var(--muted);
+}
+.xhead .xh-side { display: flex; gap: 9px; align-items: center; }
+
+/* Пометка «оценка»: всё, что посчитано, а не выгружено из базы. Правило
+   19 задания — mock-цифры не выдаём за банковские данные. */
+.est {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 7px; border-radius: 99px;
+  border: 1px solid var(--line); background: var(--brass-wash);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px; letter-spacing: .04em; color: var(--brass);
+  cursor: help; white-space: nowrap;
+}
+
+/* Полоса «симулированные данные» — видна на всех новых экранах. */
+.simbar {
+  display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+  margin-bottom: 16px; padding: 9px 13px;
+  border: 1px solid var(--line); border-left: 2px solid var(--brass);
+  border-radius: 10px; background: var(--brass-wash);
+  font-size: 11.5px; color: var(--muted);
+}
+.simbar b { color: var(--brass); font-weight: 600; }
+
+/* ============ карточки метрик ============ */
+
+.mgrid {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  margin-bottom: 18px;
+}
+.mcard {
+  position: relative; padding: 15px 16px 14px;
+  border: 1px solid var(--line); border-radius: var(--r);
+  background: linear-gradient(180deg, var(--panel2), var(--panel));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .03);
+}
+.mcard .mlabel {
+  font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--muted2); margin-bottom: 9px;
+}
+.mcard .mvalue {
+  font-family: 'Unbounded', sans-serif; font-size: 27px; font-weight: 500;
+  letter-spacing: -.015em; line-height: 1.05;
+}
+.mcard .mfoot {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 9px; font-size: 11px; color: var(--muted);
+}
+.mcard .mhint { margin-top: 7px; font-size: 11px; line-height: 1.5; color: var(--muted2); }
+
+/* Дельта к прошлому периоду. Цвет по смыслу, а не по знаку: падение
+   времени ответа — это хорошо, и красным оно быть не должно. */
+.delta {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px;
+}
+.delta.good { color: var(--ok); }
+.delta.bad { color: var(--rose-hi); }
+.delta.flat { color: var(--muted2); }
+
+/* Крупные плитки Business Impact. */
+.bigimpact { grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); }
+.bigimpact .mvalue { font-size: 33px; }
+
+/* ============ секции ============ */
+
+.xsec { margin-bottom: 20px; }
+.xsec > h3 {
+  margin: 0 0 11px; font-size: 11px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--muted2); font-weight: 600;
+}
+.xcols { display: grid; gap: 14px; grid-template-columns: 1fr 1fr; align-items: start; }
+.xcols.wide { grid-template-columns: 1.35fr 1fr; }
+@media (max-width: 1100px) { .xcols, .xcols.wide { grid-template-columns: 1fr; } }
+
+.panel {
+  padding: 15px 16px; border: 1px solid var(--line); border-radius: var(--r);
+  background: linear-gradient(180deg, var(--panel2), var(--panel));
+}
+.panel > h4 {
+  margin: 0 0 11px; font-size: 12.5px; font-weight: 600;
+  display: flex; align-items: center; gap: 8px;
+}
+
+/* ============ находки AI ============ */
+
+.insights { display: flex; flex-direction: column; gap: 11px; }
+.insight {
+  border: 1px solid var(--line); border-radius: var(--r);
+  background: linear-gradient(180deg, var(--panel2), var(--panel));
+  overflow: hidden;
+}
+/* Полоса слева кодирует характер находки — она же повторяется в отчётах. */
+.insight { border-left: 2px solid var(--line); }
+.insight.anomaly { border-left-color: var(--rose); }
+.insight.emerging { border-left-color: var(--brass); }
+.insight.positive { border-left-color: var(--ok); }
+
+.insight .ihead {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 13px 15px; cursor: pointer; user-select: none;
+}
+.insight .ikind {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px; letter-spacing: .09em; text-transform: uppercase;
+  padding: 2px 7px; border-radius: 99px; border: 1px solid var(--line);
+}
+.insight.anomaly .ikind { color: var(--rose-hi); background: var(--rose-wash); }
+.insight.emerging .ikind { color: var(--brass); background: var(--brass-wash); }
+.insight.positive .ikind { color: var(--ok); background: rgba(95, 199, 158, .1); }
+.insight .ititle { font-size: 13.5px; font-weight: 600; flex: 1; min-width: 0; }
+.insight .iconf {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10.5px; color: var(--muted2);
+}
+.insight .ichev { color: var(--muted2); font-size: 11px; transition: transform .18s; }
+.insight.open .ichev { transform: rotate(180deg); }
+
+.insight .ibody {
+  padding: 0 15px 14px; display: grid; gap: 12px;
+  grid-template-columns: 1fr 1fr;
+}
+@media (max-width: 900px) { .insight .ibody { grid-template-columns: 1fr; } }
+.iblock .ilbl {
+  font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--muted2); margin-bottom: 5px;
+}
+.iblock p { margin: 0; font-size: 12px; line-height: 1.6; color: var(--paper); }
+.ievidence { margin: 0; padding-left: 16px; }
+.ievidence li {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10.5px; line-height: 1.75; color: var(--muted);
+}
+
+/* ============ разбор причины ============ */
+
+/* Вертикальная цепочка: проблема → доказательства → причина → эффект →
+   рекомендация. Смысл компонента в том, что он читается сверху вниз как
+   один довод, поэтому шаги соединены линией. */
+.rca { display: flex; flex-direction: column; }
+.rca .rrow {
+  position: relative; padding: 0 0 16px 26px; border-left: 1px solid var(--line);
+}
+.rca .rrow:last-child { border-left-color: transparent; padding-bottom: 0; }
+.rca .rdot {
+  position: absolute; left: -5px; top: 3px; width: 9px; height: 9px;
+  border-radius: 50%; background: var(--panel); border: 2px solid var(--line);
+}
+.rca .rrow.problem .rdot { border-color: var(--rose); }
+.rca .rrow.cause .rdot { border-color: var(--brass); }
+.rca .rrow.rec .rdot { border-color: var(--ok); }
+.rca .rlbl {
+  font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--muted2); margin-bottom: 4px;
+}
+.rca .rtext { font-size: 12.5px; line-height: 1.6; }
+.rca .rtext.strong { font-weight: 600; }
+.rca ul { margin: 4px 0 0; padding-left: 15px; }
+.rca ul li {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10.5px; line-height: 1.7; color: var(--muted);
+}
+
+/* ============ рекомендации и действия ============ */
+
+.rec {
+  border: 1px solid var(--line); border-radius: var(--r);
+  background: linear-gradient(180deg, var(--panel2), var(--panel));
+  padding: 15px 16px; margin-bottom: 11px;
+}
+.rec .rechead { display: flex; align-items: center; gap: 9px; margin-bottom: 11px; }
+.rec .recadvice {
+  padding: 11px 13px; margin: 11px 0;
+  border: 1px solid var(--line); border-left: 2px solid var(--ok);
+  border-radius: 9px; background: rgba(95, 199, 158, .06);
+  font-size: 12.5px; line-height: 1.6;
+}
+.recactions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Кнопка действия: у неё есть состояние, и оно видно. Правило 17 задания —
+   AI ничего не выполняет сам, критичное ждёт человека. */
+.act {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 8px 13px; border-radius: 9px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--raise);
+  color: var(--paper); font: inherit; font-size: 12px;
+  transition: border-color .15s, background .15s;
+}
+.act:hover:not(:disabled) { border-color: var(--rose-dim); background: var(--panel2); }
+.act:disabled { cursor: default; opacity: .85; }
+.act .actdot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted2); }
+.act.prepared { border-color: var(--brass); color: var(--brass); }
+.act.prepared .actdot { background: var(--brass); }
+.act.done { border-color: var(--ok); color: var(--ok); }
+.act.done .actdot { background: var(--ok); }
+.actnote {
+  margin-top: 9px; font-size: 11px; line-height: 1.55; color: var(--muted2);
+}
+.actnote b { color: var(--brass); font-weight: 600; }
+
+/* ============ Ask Soro ============ */
+
+.ask {
+  border: 1px solid var(--line); border-radius: var(--r);
+  background: linear-gradient(180deg, var(--panel2), var(--panel));
+  padding: 17px 18px; margin-bottom: 18px;
+}
+.ask h3 {
+  margin: 0 0 12px; font-family: 'Unbounded', sans-serif;
+  font-size: 15px; font-weight: 500;
+}
+.askrow { display: flex; gap: 9px; }
+.askrow input {
+  flex: 1; min-width: 0; padding: 12px 15px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--ink); color: var(--paper); font: inherit; font-size: 13px;
+}
+.askrow input:focus { outline: none; border-color: var(--rose-dim); }
+.askrow input::placeholder { color: var(--muted2); }
+.chips { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 11px; }
+.chip {
+  padding: 6px 11px; border-radius: 99px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--panel);
+  color: var(--muted); font: inherit; font-size: 11.5px;
+  transition: border-color .15s, color .15s;
+}
+.chip:hover { border-color: var(--rose-dim); color: var(--paper); }
+
+.answer { margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--line-soft); }
+.answer .atext { font-size: 13.5px; line-height: 1.65; margin-bottom: 13px; }
+.agrid { display: grid; gap: 12px; grid-template-columns: 1.2fr 1fr; }
+@media (max-width: 900px) { .agrid { grid-template-columns: 1fr; } }
+.abox {
+  padding: 11px 13px; border: 1px solid var(--line-soft);
+  border-radius: 9px; background: var(--ink);
+}
+.abox .albl {
+  font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--muted2); margin-bottom: 7px;
+}
+.abox ul { margin: 0; padding-left: 15px; }
+.abox li {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10.5px; line-height: 1.8; color: var(--muted);
+}
+.ametrics { display: flex; gap: 15px; flex-wrap: wrap; }
+.ametric .amv {
+  font-family: 'Unbounded', sans-serif; font-size: 18px; font-weight: 500;
+}
+.ametric .aml { font-size: 10.5px; color: var(--muted2); margin-top: 2px; }
+
+/* ============ отчёты AI ============ */
+
+.rtypes {
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+  margin-bottom: 16px;
+}
+.rtype {
+  text-align: left; cursor: pointer; padding: 13px 14px;
+  border: 1px solid var(--line); border-radius: var(--r);
+  background: linear-gradient(180deg, var(--panel2), var(--panel));
+  color: var(--paper); font: inherit;
+  transition: border-color .15s, transform .15s;
+}
+.rtype:hover { border-color: var(--rose-dim); transform: translateY(-1px); }
+.rtype.on { border-color: var(--rose); background: var(--rose-wash); }
+.rtype b { display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 4px; }
+.rtype small { display: block; font-size: 11px; color: var(--muted2); line-height: 1.5; }
+.rtype .rper {
+  display: block; margin-top: 7px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px; color: var(--muted2);
+}
+
+/* Прогресс генерации: этапы гаснут по мере прохождения. */
+.rprogress { padding: 22px 18px; }
+.rstage {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 0; font-size: 12.5px; color: var(--muted2);
+  transition: color .25s;
+}
+.rstage.on { color: var(--paper); }
+.rstage.done { color: var(--muted); }
+.rstage .sdot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--line); flex: 0 0 7px;
+}
+.rstage.on .sdot { background: var(--rose); box-shadow: 0 0 0 3px var(--rose-wash); }
+.rstage.done .sdot { background: var(--ok); }
+
+.rdoc {
+  border: 1px solid var(--line); border-radius: var(--r);
+  background: linear-gradient(180deg, var(--panel2), var(--panel));
+  overflow: hidden;
+}
+.rdoc .rdhead {
+  display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap;
+  padding: 17px 19px; border-bottom: 1px solid var(--line-soft);
+}
+.rdoc .rdhead h2 {
+  margin: 0 0 4px; font-family: 'Unbounded', sans-serif;
+  font-size: 18px; font-weight: 500;
+}
+.rdoc .rdhead .rdper {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px; color: var(--muted2);
+}
+.rdoc .rdbody { padding: 17px 19px; }
+.rsec { margin-bottom: 20px; }
+.rsec:last-child { margin-bottom: 0; }
+.rsec h4 {
+  margin: 0 0 9px; font-size: 11px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--rose-hi); font-weight: 600;
+}
+.rsec p { margin: 0; font-size: 12.5px; line-height: 1.7; color: var(--paper); }
+.rsec ul { margin: 0; padding-left: 17px; }
+.rsec li { font-size: 12px; line-height: 1.8; }
+.rmetrics {
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+}
+.rmetric {
+  padding: 10px 12px; border: 1px solid var(--line-soft);
+  border-radius: 9px; background: var(--ink);
+}
+.rmetric .rmv { font-family: 'Unbounded', sans-serif; font-size: 17px; font-weight: 500; }
+.rmetric .rml { font-size: 10.5px; color: var(--muted2); margin-top: 3px; }
+
+/* ============ безопасность ============ */
+
+.sgrid {
+  display: grid; gap: 11px;
+  grid-template-columns: repeat(auto-fit, minmax(255px, 1fr));
+}
+.sctl {
+  display: flex; gap: 11px; padding: 13px 14px;
+  border: 1px solid var(--line); border-radius: var(--r);
+  background: linear-gradient(180deg, var(--panel2), var(--panel));
+}
+.sctl .stick {
+  width: 19px; height: 19px; border-radius: 50%; flex: 0 0 19px;
+  display: grid; place-items: center; font-size: 11px;
+  background: rgba(95, 199, 158, .12); color: var(--ok);
+  border: 1px solid rgba(95, 199, 158, .3);
+}
+.sctl b { display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 4px; }
+.sctl small { font-size: 11px; line-height: 1.55; color: var(--muted2); }
+
+/* Маскирование: до → после. Главный аргумент банковского демо, поэтому
+   таблица крупнее обычной и вынесена в отдельную панель. */
+.masking { display: flex; flex-direction: column; gap: 9px; }
+.maskrow {
+  display: grid; align-items: center; gap: 11px;
+  grid-template-columns: 92px 1fr 20px 1fr;
+  padding: 10px 12px; border: 1px solid var(--line-soft);
+  border-radius: 9px; background: var(--ink);
+}
+@media (max-width: 760px) { .maskrow { grid-template-columns: 1fr; } }
+.maskrow .mklbl { font-size: 11px; color: var(--muted2); }
+.maskrow .mkval {
+  font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px;
+}
+.maskrow .mkarrow { color: var(--muted2); text-align: center; }
+.maskrow .mkval.out { color: var(--ok); }
+
+/* ============ Killer Demo ============ */
+
+/* Приглашение на экране 12 — единственная кнопка, которую презентатор
+   должен найти на встрече, поэтому она крупная и по центру. */
+.dstart {
+  display: flex; flex-direction: column; align-items: center; gap: 15px;
+  padding: 46px 24px; text-align: center;
+  border: 1px solid var(--line); border-radius: 16px;
+  background:
+    radial-gradient(700px 320px at 50% -20%, rgba(232, 80, 107, .16), transparent 65%),
+    linear-gradient(180deg, var(--panel2), var(--panel));
+}
+.dstart h1 {
+  margin: 0; font-family: 'Unbounded', sans-serif;
+  font-size: 30px; font-weight: 500; letter-spacing: -.015em;
+}
+.dstart h1 em { color: var(--rose-hi); font-style: normal; }
+.dstart p {
+  margin: 0; max-width: 560px; font-size: 13px;
+  line-height: 1.7; color: var(--muted);
+}
+.runbtn {
+  display: inline-flex; align-items: center; gap: 11px;
+  padding: 15px 30px; margin-top: 5px; cursor: pointer;
+  border: 1px solid var(--rose); border-radius: 12px;
+  background: linear-gradient(180deg, var(--rose), var(--rose-dim));
+  color: #fff; font: inherit; font-size: 15px; font-weight: 600;
+  font-family: 'Unbounded', sans-serif; letter-spacing: .01em;
+  box-shadow: 0 12px 32px rgba(232, 80, 107, .3);
+  transition: transform .15s, box-shadow .15s;
+}
+.runbtn:hover { transform: translateY(-1px); box-shadow: 0 16px 40px rgba(232, 80, 107, .4); }
+.dsteps {
+  display: grid; gap: 9px; margin-top: 20px; width: 100%;
+  grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+}
+.dstepcard {
+  padding: 11px 12px; border: 1px solid var(--line-soft);
+  border-radius: 10px; background: var(--ink); text-align: left;
+}
+.dstepcard .dsn {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px; color: var(--rose-hi); margin-bottom: 5px;
+}
+.dstepcard .dst { font-size: 11.5px; line-height: 1.5; color: var(--muted); }
+
+/* --- полноэкранный режим --- */
+
+/* Демо занимает весь экран: на встрече проектор показывает только его, и
+   боковое меню консоли в кадре только отвлекает. */
+.stage {
+  position: fixed; inset: 0; z-index: 200; display: flex; flex-direction: column;
+  background:
+    radial-gradient(1200px 640px at 80% -14%, rgba(147, 39, 60, .34), transparent 60%),
+    radial-gradient(800px 560px at -6% 108%, rgba(232, 80, 107, .08), transparent 58%),
+    var(--ink);
+}
+.stagetop {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 13px 24px; border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, var(--panel2), rgba(27, 15, 22, .6));
+}
+.stagetop .stitle {
+  font-family: 'Unbounded', sans-serif; font-size: 13px;
+  font-weight: 500; letter-spacing: .06em; text-transform: uppercase;
+}
+.stagetop .stitle em { color: var(--rose-hi); font-style: normal; }
+.stagetop .sspacer { flex: 1; }
+.stagectl { display: flex; gap: 8px; }
+.stagectl .btn { font-size: 12px; }
+
+/* Полоса шагов. Пройденные гаснут, текущий подсвечен — зритель всегда
+   знает, где мы в сценарии и сколько осталось. */
+.track { display: flex; gap: 5px; padding: 11px 24px; flex-wrap: wrap; }
+.tstep {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 10px; border-radius: 99px;
+  border: 1px solid var(--line); background: var(--panel);
+  font-size: 10.5px; color: var(--muted2); cursor: pointer;
+  transition: border-color .2s, color .2s, background .2s;
+}
+.tstep .tn {
+  font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 9.5px;
+}
+.tstep.done { color: var(--muted); border-color: var(--line); }
+.tstep.done .tn { color: var(--ok); }
+.tstep.on {
+  color: var(--paper); border-color: var(--rose);
+  background: var(--rose-wash);
+}
+.tstep.on .tn { color: var(--rose-hi); }
+
+/* Подпись для зрителя — крупная строка под полосой шагов. */
+.caption {
+  padding: 4px 24px 14px; font-size: 15px; line-height: 1.5;
+  color: var(--paper); font-family: 'Unbounded', sans-serif; font-weight: 400;
+}
+.caption em { color: var(--rose-hi); font-style: normal; }
+
+.stagebody {
+  flex: 1; min-height: 0; overflow: auto; padding: 0 24px 24px;
+}
+.stagewrap { max-width: 1320px; margin: 0 auto; }
+
+/* Полоса времени шага — тонкая, внизу шапки. */
+.timebar { height: 2px; background: var(--line-soft); }
+.timebar .fill {
+  height: 100%; background: linear-gradient(90deg, var(--rose-dim), var(--rose));
+  transition: width .1s linear;
+}
+
+/* --- содержимое шагов --- */
+
+.dchat { display: grid; gap: 14px; grid-template-columns: 1.25fr 1fr; align-items: start; }
+@media (max-width: 1000px) { .dchat { grid-template-columns: 1fr; } }
+
+.phone {
+  border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
+  background: linear-gradient(180deg, var(--panel2), var(--panel));
+}
+.phone .phead {
+  display: flex; align-items: center; gap: 9px;
+  padding: 12px 15px; border-bottom: 1px solid var(--line-soft);
+  font-size: 12px; color: var(--muted);
+}
+.phone .pdot { width: 7px; height: 7px; border-radius: 50%; background: var(--tg); }
+.phone .plog { padding: 16px 15px; display: flex; flex-direction: column; gap: 11px; }
+.bub {
+  max-width: 82%; padding: 11px 14px; border-radius: 14px;
+  font-size: 13px; line-height: 1.6;
+}
+.bub.me {
+  align-self: flex-end; background: linear-gradient(180deg, var(--rose), var(--rose-dim));
+  color: #fff; border-bottom-right-radius: 5px;
+}
+.bub.bot {
+  align-self: flex-start; background: var(--raise);
+  border: 1px solid var(--line); border-bottom-left-radius: 5px;
+}
+.bub.warn { border-color: var(--brass); background: var(--brass-wash); }
+.bub sup {
+  display: inline-block; margin-left: 3px; padding: 0 4px;
+  border-radius: 4px; background: var(--rose-wash); color: var(--rose-hi);
+  font-size: 9.5px; font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+/* Печатающийся курсор — ответ виден «вживую», как на площадке. */
+.cursor {
+  display: inline-block; width: 7px; height: 14px; vertical-align: -2px;
+  margin-left: 2px; background: var(--rose-hi); animation: blink 1s steps(2) infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+/* Разбор справа: то, что обычно скрыто. */
+.xray { display: flex; flex-direction: column; gap: 11px; }
+.xrow {
+  display: flex; align-items: center; justify-content: space-between; gap: 11px;
+  padding: 10px 13px; border: 1px solid var(--line-soft);
+  border-radius: 9px; background: var(--ink);
+}
+.xrow .xl { font-size: 11px; color: var(--muted2); }
+.xrow .xv {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px; text-align: right;
+}
+.xrow .xv.ok { color: var(--ok); }
+.xrow .xv.warn { color: var(--brass); }
+
+.frag {
+  padding: 11px 13px; border: 1px solid var(--line-soft);
+  border-left: 2px solid var(--brass); border-radius: 9px; background: var(--ink);
+}
+.frag .fhead {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 9px; margin-bottom: 7px;
+}
+.frag .fname {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px; color: var(--brass);
+}
+.frag .fscore {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10.5px; color: var(--muted2);
+}
+.frag .fpass { font-size: 11.5px; line-height: 1.6; color: var(--muted); }
+
+/* Экран эскалации. */
+.escalate {
+  display: flex; align-items: center; gap: 13px;
+  padding: 15px 17px; border: 1px solid var(--brass);
+  border-radius: var(--r); background: var(--brass-wash); margin-bottom: 12px;
+}
+.escalate .eicon { font-size: 20px; }
+.escalate b { display: block; font-size: 13.5px; color: var(--brass); margin-bottom: 3px; }
+.escalate small { font-size: 11.5px; color: var(--muted); }
+
+/* Рабочее место оператора внутри демо. */
+.opwork { display: grid; gap: 14px; grid-template-columns: 1.15fr 1fr; align-items: start; }
+@media (max-width: 1000px) { .opwork { grid-template-columns: 1fr; } }
+.oplog { display: flex; flex-direction: column; gap: 9px; padding: 15px; }
+.opmsg { display: flex; gap: 9px; align-items: flex-start; }
+.opmsg .opwho {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted2); width: 62px; flex: 0 0 62px; padding-top: 3px;
+}
+.opmsg .optext {
+  flex: 1; padding: 9px 12px; border-radius: 10px;
+  background: var(--ink); border: 1px solid var(--line-soft);
+  font-size: 12px; line-height: 1.55;
+}
+.opmsg.client .optext { border-left: 2px solid var(--rose); }
+.opmsg.bot .optext { border-left: 2px solid var(--line); }
+.opmsg.operator .optext { border-left: 2px solid var(--ok); }
+.opmsg .opat {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px; color: var(--muted2); padding-top: 3px;
+}
+
+/* Панель AI-подсказок оператору. */
+.aipanel { display: flex; flex-direction: column; gap: 11px; }
+.aibox {
+  padding: 12px 14px; border: 1px solid var(--line);
+  border-radius: 10px; background: linear-gradient(180deg, var(--panel2), var(--panel));
+}
+.aibox .ailbl {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 7px;
+  font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--muted2);
+}
+.aibox .ailbl .aidot {
+  width: 5px; height: 5px; border-radius: 50%; background: var(--rose);
+}
+.aibox p { margin: 0; font-size: 12px; line-height: 1.6; }
+.aibox .aival { font-size: 13px; font-weight: 600; }
+.aisuggest {
+  border-left: 2px solid var(--ok);
+  background: rgba(95, 199, 158, .06);
+}
+.aiactions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 10px; }
+
+/* Аналитика в демо: счётчик и находки. */
+.dscan { text-align: center; padding: 26px 18px; }
+.dscan .dcount {
+  font-family: 'Unbounded', sans-serif; font-size: 46px; font-weight: 500;
+  letter-spacing: -.02em; line-height: 1;
+}
+.dscan .dclbl { margin-top: 9px; font-size: 12.5px; color: var(--muted); }
+.dfindings {
+  display: grid; gap: 10px; margin-top: 22px;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+.dfind {
+  display: flex; align-items: center; gap: 10px; text-align: left;
+  padding: 12px 14px; border: 1px solid var(--line);
+  border-radius: 10px; background: var(--panel);
+  font-size: 12.5px; line-height: 1.5;
+  opacity: 0; transform: translateY(6px);
+  animation: rise .45s ease forwards;
+}
+@keyframes rise { to { opacity: 1; transform: none; } }
+.dfind.warn { border-left: 2px solid var(--rose); }
+.dfind.new { border-left: 2px solid var(--brass); }
+.dfind.ok { border-left: 2px solid var(--ok); }
+.dfind .fi { font-size: 15px; }
+
+/* Финальный экран. */
+.dfinal { text-align: center; padding: 30px 18px; }
+.dfinal h1 {
+  margin: 0 0 26px; font-family: 'Unbounded', sans-serif;
+  font-size: 38px; font-weight: 500; line-height: 1.2; letter-spacing: -.02em;
+}
+.dfinal h1 em { color: var(--rose-hi); font-style: normal; display: block; }
+.chain {
+  display: flex; align-items: center; justify-content: center;
+  gap: 9px; flex-wrap: wrap; margin-bottom: 28px;
+}
+.chain .clink {
+  padding: 9px 15px; border: 1px solid var(--line); border-radius: 99px;
+  background: var(--panel); font-size: 12.5px;
+  opacity: 0; animation: rise .4s ease forwards;
+}
+.chain .clink.last { border-color: var(--rose); background: var(--rose-wash); color: var(--rose-hi); }
+.chain .carrow { color: var(--muted2); opacity: 0; animation: rise .4s ease forwards; }
+.formula {
+  display: flex; align-items: center; justify-content: center;
+  gap: 11px; flex-wrap: wrap; margin-bottom: 26px;
+  font-size: 13px; color: var(--muted);
+}
+.formula .fplus { color: var(--rose-hi); }
+.formula .feq {
+  font-family: 'Unbounded', sans-serif; font-size: 20px;
+  color: var(--paper); margin: 0 4px;
+}
+
+/* ============ переключатель режимов ============ */
+
+/* Operations | Executive. Стоит в шапке рядом с воркспейсом: это выбор
+   того, ЧЬИМИ глазами смотрят на стенд, и он должен быть виден всегда. */
+.modetog {
+  display: flex; gap: 2px; padding: 2px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--ink);
+}
+.modetog button {
+  padding: 5px 11px; border: 0; border-radius: 7px; cursor: pointer;
+  background: none; color: var(--muted2); font: inherit; font-size: 11.5px;
+  transition: background .15s, color .15s;
+}
+.modetog button.on { background: var(--raise); color: var(--paper); }
+
+/* Разделитель групп в боковом меню. */
+.navgroup {
+  margin: 13px 0 6px; padding: 0 11px;
+  font-size: 9.5px; letter-spacing: .13em; text-transform: uppercase;
+  color: var(--muted2);
+}
+.navgroup:first-child { margin-top: 0; }
+
+/* Пункт меню, запускающий демо, — единственный акцентный в списке. */
+nav button.accent { color: var(--rose-hi); }
+nav button.accent .n { color: var(--rose-hi); }
+
+/* ============ источники в ответе (площадка) ============ */
+
+.sources { margin-top: 11px; padding-top: 11px; border-top: 1px solid var(--line-soft); }
+.sources .slbl {
+  font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--muted2); margin-bottom: 7px;
+}
+.srcitem {
+  display: flex; align-items: center; gap: 8px; padding: 6px 0;
+  font-size: 11.5px; color: var(--muted);
+}
+.srcitem .sicon { color: var(--brass); }
+.srcitem .spage {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10.5px; color: var(--muted2);
+}
+.srcitem .sscore {
+  margin-left: auto; font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10.5px; color: var(--muted2);
+}
+.techtog {
+  margin-top: 9px; padding: 0; border: 0; background: none; cursor: pointer;
+  color: var(--muted2); font: inherit; font-size: 11px; text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.techtog:hover { color: var(--rose-hi); }
+
+/* ============ бэкенд недоступен ============ */
+
+/* Плашка поверх экранов, когда консоль не может достучаться до сервера.
+   Стоит НАД содержимым, а не вместо него: экран «Демо» работает без
+   сервера, и уводить с него человека нельзя. */
+.offline {
+  margin-bottom: 16px; padding: 15px 17px;
+  border: 1px solid var(--brass); border-left: 2px solid var(--brass);
+  border-radius: var(--r); background: var(--brass-wash);
+}
+.offhead {
+  display: flex; align-items: center; gap: 9px; margin-bottom: 9px;
+  font-size: 13.5px; font-weight: 600; color: var(--brass);
+}
+.offdot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--brass);
+  box-shadow: 0 0 0 3px rgba(220, 168, 76, .18);
+}
+.offtext {
+  margin: 0 0 13px; font-size: 12.5px; line-height: 1.65; color: var(--paper);
+  max-width: 640px;
+}
+.offtext code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11.5px; padding: 1px 5px; border-radius: 5px;
+  background: var(--ink); color: var(--brass);
+}
+.offrow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.offrow .text { flex: 1; min-width: 240px; }
+.offnote { margin-top: 11px; font-size: 11.5px; color: var(--muted); }

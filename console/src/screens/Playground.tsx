@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import { API_BASE, getWorkspace } from "../lib/api";
+import { API_BASE, currentWorkspace, getWorkspace } from "../lib/api";
 
 // Экран 03 «Площадка · стеклянный ящик».
 //
@@ -44,6 +44,58 @@ function fragmentSource(fragment: Fragment): string {
   return fragment.page !== null
     ? `${fragment.title}, стр. ${fragment.page}`
     : fragment.title;
+}
+
+/** Источники под ответом: чем именно он подкреплён.
+ *
+ *  ДВА УРОВНЯ ПОДРОБНОСТИ. Обычному зрителю нужны документ и страница —
+ *  этого достаточно, чтобы проверить ответ. ИТ-службе и безопасности нужны
+ *  оценки близости и тайминги, но вываливать их всем — значит превратить
+ *  понятный ответ в отладочный вывод. Поэтому техника скрыта за строкой
+ *  «показать технические детали». */
+function Sources({
+  fragments,
+  telemetry,
+}: {
+  fragments: Fragment[];
+  telemetry: Telemetry | null;
+}) {
+  const [tech, setTech] = useState(false);
+  const best = fragments.reduce((top, fragment) => Math.max(top, fragment.score), 0);
+
+  return (
+    <div className="sources">
+      <div className="slbl">
+        Источники · {fragments.length}
+      </div>
+
+      {fragments.map((fragment) => (
+        <div className="srcitem" key={fragment.chunk_id}>
+          <span className="sicon">📄</span>
+          <span>{fragment.title}</span>
+          {fragment.page !== null && <span className="spage">с. {fragment.page}</span>}
+          {tech && <span className="sscore">{formatScore(fragment.score)}</span>}
+        </div>
+      ))}
+
+      <button className="techtog" onClick={() => setTech(!tech)}>
+        {tech ? "Скрыть технические детали" : "Показать технические детали"}
+      </button>
+
+      {tech && (
+        <div className="abox" style={{ marginTop: 9 }}>
+          <div className="albl">Разбор ответа</div>
+          <ul>
+            <li>Лучшая близость: {formatScore(best)}</li>
+            <li>Фрагментов процитировано: {fragments.length}</li>
+            {telemetry && <li>Поиск: {telemetry.search_ms} мс</li>}
+            {telemetry && <li>Генерация: {telemetry.generation_ms} мс</li>}
+            {telemetry && <li>Токенов: {telemetry.tokens}</li>}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // «0,69» — как в эталоне: запятая, два знака
@@ -134,7 +186,9 @@ export default function Playground() {
   const [opened, setOpened] = useState<Set<number>>(new Set());
 
   const logRef = useRef<HTMLDivElement>(null);
-  const sourceRef = useRef<EventSource | null>(null);
+  // Отмена текущего потока: уход с экрана или новый вопрос обрывают
+  // предыдущий запрос, иначе его дельты продолжат дописываться в ответ.
+  const abortRef = useRef<AbortController | null>(null);
   // Ветка диалога: по ней бэкенд помнит предыдущие реплики. Одна на
   // вкладку и на всё время её жизни — перезагрузка страницы начинает
   // разговор заново, как и должно быть на тестовом экране.
@@ -145,6 +199,22 @@ export default function Playground() {
 
   const busy =
     stage === "request" || stage === "retrieval" || stage === "generation";
+
+  // На какие фрагменты ответ реально сослался. Берём номера из ссылок [n]
+  // в тексте, а не весь список найденного: в панели справа лежат все
+  // кандидаты поиска, но под ответом должно стоять только то, чем он
+  // подкреплён, — иначе «источники» превращаются в список похожих
+  // документов и перестают что-либо доказывать.
+  const cited = Array.from(
+    new Set(
+      Array.from(answer.matchAll(/\[(\d{1,2}(?:\s*[.,;]\s*\d{1,2})*)\]/g)).flatMap((match) =>
+        match[1].split(/[,;]/).map((part) => parseInt(part, 10)),
+      ),
+    ),
+  )
+    .filter((number) => Number.isFinite(number))
+    .map((number) => fragments.find((fragment) => fragment.n === number))
+    .filter((fragment): fragment is Fragment => fragment !== undefined);
 
   // лог всегда прокручен вниз: ответ печатается вживую
   useEffect(() => {
@@ -160,12 +230,12 @@ export default function Playground() {
 
   // Уходим с экрана посреди генерации — соединение закрываем, иначе
   // бэкенд продолжит гнать поток в никуда.
-  useEffect(() => () => sourceRef.current?.close(), []);
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   async function ask(text: string) {
     if (!text.trim() || busy) return;
 
-    sourceRef.current?.close();
+    abortRef.current?.abort();
     // предыдущая пара уезжает в историю, а не стирается
     if (asked) {
       setHistory((current) => [
@@ -185,12 +255,25 @@ export default function Playground() {
     setOpened(new Set());
     setStage("request");
 
+    // Воркспейс читаем один раз: он нужен и для POST, и для потока ниже.
+    const workspace = currentWorkspace();
     let messageId: string;
     try {
       const response = await fetch(`${API_BASE}/playground/messages`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
+        // Воркспейс идёт и отсюда: этот fetch собран вручную, мимо
+        // `request()` из lib/api, и без заголовка площадка спрашивала бы
+        // банк по умолчанию, а не тот, что выбран в шапке.
+        headers: {
+          "Content-Type": "application/json",
+          // Обход заглушки бесплатного туннеля — см. apiHeaders в lib/api.
+          "ngrok-skip-browser-warning": "1",
+          ...(workspace ? { "X-Workspace": workspace } : {}),
+        },
+        // credentials НЕ включаем: кук нет, а с другого домена режим
+        // "include" требует Access-Control-Allow-Credentials и валит
+        // запрос ещё на preflight. См. комментарий в lib/api.ts.
+        credentials: "same-origin",
         body: JSON.stringify({ text, thread_id: threadId }),
       });
       if (!response.ok) throw new Error(await response.text());
@@ -201,40 +284,85 @@ export default function Playground() {
       return;
     }
 
-    const source = new EventSource(
-      `${API_BASE}/playground/stream?message_id=${encodeURIComponent(messageId)}`,
-    );
-    sourceRef.current = source;
+    // ПОТОК ЧИТАЕМ ЧЕРЕЗ fetch, А НЕ EventSource.
+    //
+    // EventSource проще, но не умеет отправлять заголовки вовсе — а они
+    // нужны: бесплатный туннель без `ngrok-skip-browser-warning` отдаёт
+    // браузеру HTML-заглушку вместо потока, и площадка на выложенной
+    // консоли обрывалась на «Соединение прервано». Заголовок воркспейса
+    // здесь тоже уходит по-человечески, а не параметром в адресе.
+    //
+    // Взамен приходится разбирать кадры SSE самим: они разделены пустой
+    // строкой, внутри строки `event:` и `data:`.
+    const controller = new AbortController();
+    abortRef.current = controller;
 
-    source.addEventListener("retrieval", (event) => {
-      const data = JSON.parse((event as MessageEvent).data);
-      setFragments(data.fragments);
-      setBelowThreshold(!data.has_answer);
-      setStage(data.has_answer ? "generation" : "retrieval");
-    });
+    try {
+      const response = await fetch(
+        `${API_BASE}/playground/stream?message_id=${encodeURIComponent(messageId)}`,
+        {
+          headers: {
+            Accept: "text/event-stream",
+            "ngrok-skip-browser-warning": "1",
+            ...(workspace ? { "X-Workspace": workspace } : {}),
+          },
+          credentials: "same-origin",
+          signal: controller.signal,
+        },
+      );
+      if (!response.ok || response.body === null) {
+        throw new Error(await response.text());
+      }
 
-    source.addEventListener("delta", (event) => {
-      const data = JSON.parse((event as MessageEvent).data);
-      setAnswer((current) => current + data.text);
-    });
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
 
-    source.addEventListener("final", (event) => {
-      const data = JSON.parse((event as MessageEvent).data);
-      if (data.text) setAnswer(data.text);
-      setTelemetry(data.telemetry);
-      setEscalated(data.escalated);
-      setStage("done");
-      source.close();
-    });
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
 
-    source.addEventListener("error", (event) => {
-      // событие error приходит и от сервера (наше), и от самого
-      // EventSource при обрыве — различаем по наличию данных
-      const raw = (event as MessageEvent).data;
-      setError(raw ? JSON.parse(raw).detail : "Соединение прервано");
+        // Кадры отделены пустой строкой. Последний кусок может быть
+        // неполным — оставляем его в буфере до следующего чтения.
+        let split = buffer.indexOf("\n\n");
+        while (split !== -1) {
+          const frame = buffer.slice(0, split);
+          buffer = buffer.slice(split + 2);
+          split = buffer.indexOf("\n\n");
+
+          let name = "message";
+          const payload: string[] = [];
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("event:")) name = line.slice(6).trim();
+            else if (line.startsWith("data:")) payload.push(line.slice(5).trim());
+          }
+          if (payload.length === 0) continue;
+          const data = JSON.parse(payload.join("\n"));
+
+          if (name === "retrieval") {
+            setFragments(data.fragments);
+            setBelowThreshold(!data.has_answer);
+            setStage(data.has_answer ? "generation" : "retrieval");
+          } else if (name === "delta") {
+            setAnswer((current) => current + data.text);
+          } else if (name === "final") {
+            if (data.text) setAnswer(data.text);
+            setTelemetry(data.telemetry);
+            setEscalated(data.escalated);
+            setStage("done");
+          } else if (name === "error") {
+            setError(data.detail ?? "Ошибка на стороне сервера");
+            setStage("error");
+          }
+        }
+      }
+    } catch (err) {
+      // Отмена — это уход с экрана или новый вопрос, а не поломка.
+      if ((err as Error).name === "AbortError") return;
+      setError(err instanceof Error ? err.message : "Соединение прервано");
       setStage("error");
-      source.close();
-    });
+    }
   }
 
   return (
@@ -260,7 +388,7 @@ export default function Playground() {
               {model || "модель…"}
             </span>
             <span style={{ color: "var(--muted2)" }}>·</span>
-            <span>База знаний: Банк Эсхата</span>
+            <span>База знаний: Demo Bank</span>
           </div>
 
           <div className="chatlog" ref={logRef}>
@@ -334,6 +462,14 @@ export default function Playground() {
                   {stage === "generation" && <span className="caret" />}
                   {escalated && stage === "done" && (
                     <div className="esc">⤴ Передан оператору</div>
+                  )}
+
+                  {/* Источники под самим ответом, а не только в панели
+                      справа. Панель — для ИТ-службы, она разбирает поиск;
+                      здесь же клиентский вид: на что опирался ответ.
+                      Первый вопрос банка к любому ответу — «откуда это». */}
+                  {stage === "done" && !error && !belowThreshold && cited.length > 0 && (
+                    <Sources fragments={cited} telemetry={telemetry} />
                   )}
                 </div>
               </div>

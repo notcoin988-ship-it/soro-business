@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import func, select
 
-from app.core.rag import build_tsquery, embed_query, search
+from app.core.rag import build_tsquery, embed_query, more_from_documents, search
 from app.models import Chunk, Document
 
 # Фрагменты базы знаний тестового банка. Первый — целевой для вопроса про
@@ -324,3 +324,88 @@ async def test_embed_query_matches_schema_dimension():
 
     vector = await embed_query("Фоизи амонат")
     assert len(vector) == settings.EMBEDDINGS_DIM
+
+
+# ---------------------------------------------------------------------------
+# дочитывание документа на согласие клиента
+# ---------------------------------------------------------------------------
+#
+# Ветка живёт в `dialog.search_in_context`, но её условия («документ
+# дочитан до конца», «чужие документы не приносим») задаются составом
+# базы знаний — а он подконтролен только здесь, в своём воркспейсе.
+
+
+async def chunks_of(session, workspace_id, title):
+    """Фрагменты одного документа тестовой базы, по порядку страниц."""
+    return list(
+        (
+            await session.scalars(
+                select(Chunk)
+                .join(Document, Document.id == Chunk.document_id)
+                .where(Chunk.workspace_id == workspace_id, Document.title == title)
+                .order_by(Chunk.page)
+            )
+        ).all()
+    )
+
+
+async def test_more_from_documents_returns_the_rest_of_the_same_document(
+    session, knowledge
+):
+    """Клиент сказал «да» — дочитываем ТОТ ЖЕ документ.
+
+    Смысл запасного пути в том, что источник уже назван: бот сослался на
+    этот документ в прошлом ответе, и продолжение оттуда — не выдумка.
+    """
+    tariffs = await chunks_of(session, knowledge.id, "Тарифы обслуживания")
+    assert len(tariffs) > 1, "фикстура перестала давать документ из двух кусков"
+
+    more = await more_from_documents(
+        session, knowledge.id, [tariffs[0].id], "тарифы обслуживания счёта"
+    )
+
+    assert [hit.chunk_id for hit in more] == [tariffs[1].id]
+
+
+async def test_more_from_documents_never_leaves_the_cited_documents(
+    session, knowledge
+):
+    """Чужие документы не приносим, как бы они ни подходили теме.
+
+    Иначе запасной путь превращается в поиск без порога — ровно ту
+    выдумку, ради запрета которой порог и существует.
+    """
+    tariffs = await chunks_of(session, knowledge.id, "Тарифы обслуживания")
+
+    more = await more_from_documents(
+        # тема нарочно про вклады, а процитирован документ про тарифы
+        session, knowledge.id, [tariffs[0].id], "фоизи амонат ва ҷуброн"
+    )
+
+    assert more, "документ дочитан не был"
+    assert {hit.document_id for hit in more} == {tariffs[0].document_id}
+
+
+async def test_more_from_documents_is_empty_when_document_is_read_out(
+    session, knowledge
+):
+    """Документ прочитан целиком — продолжать нечем, и это честный ноль.
+
+    Вызывающий на пустой список эскалирует: лучше оператор, чем
+    «вот вам что-нибудь».
+    """
+    tariffs = await chunks_of(session, knowledge.id, "Тарифы обслуживания")
+    read_out = [chunk.id for chunk in tariffs]
+
+    assert await more_from_documents(
+        session, knowledge.id, read_out, "тарифы обслуживания"
+    ) == []
+
+
+async def test_more_from_documents_is_empty_without_citations(session, knowledge):
+    """Бот ничего не цитировал — дочитывать нечего и не из чего.
+
+    Так бывает после приветствия или ответа без ссылок: `used_chunks`
+    пуст, и запасной путь обязан промолчать, а не искать по всей базе.
+    """
+    assert await more_from_documents(session, knowledge.id, [], "тарифы") == []

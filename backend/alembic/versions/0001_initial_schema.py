@@ -25,7 +25,7 @@ def upgrade() -> None:
         CREATE TABLE workspaces (
           id           BIGSERIAL PRIMARY KEY,
           slug         TEXT UNIQUE NOT NULL,          -- 'eskhata-demo'
-          name         TEXT NOT NULL,                 -- 'Банк Эсхата'
+          name         TEXT NOT NULL,                 -- 'ДЕМО банк'
           settings     JSONB NOT NULL DEFAULT '{}',   -- тон, приветствие, языки
           created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
         );

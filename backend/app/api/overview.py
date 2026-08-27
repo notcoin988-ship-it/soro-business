@@ -28,8 +28,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.analytics import CONVERSATIONS_SQL, LATENCY_SQL
 from app.config import is_filled, settings
+from app.core.reports import CONVERSATIONS_SQL, LATENCY_SQL, bounds, rolling_period
 from app.core.dialog import get_workspace
 from app.db import get_session
 
@@ -142,7 +142,10 @@ CHANNEL_NAMES = {"telegram": "Telegram", "widget": "веб", "whatsapp": "WhatsA
 async def overview(session: AsyncSession = Depends(get_session)) -> dict:
     """Всё, что показывает экран 01, кроме переключателей безопасности."""
     workspace = await get_workspace(session)
-    params = {"ws": workspace.id, "days": DAYS}
+    # `days` нужен запросам этого файла (generate_series по дням), границы
+    # `since`/`until` — общим запросам из `core/reports`. Лишние ключи
+    # текстовый SQL игнорирует, поэтому один словарь на все восемь запросов.
+    params = {"ws": workspace.id, "days": DAYS, **bounds(rolling_period(DAYS))}
 
     conversations = (await session.execute(CONVERSATIONS_SQL, params)).one()
     daily_conversations = (

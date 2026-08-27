@@ -126,6 +126,90 @@ async def test_non_text_message_is_answered(core):
 
 
 # ---------------------------------------------------------------------------
+# отчёты руководителю
+# ---------------------------------------------------------------------------
+#
+# Один бот отвечает и клиентам банка, и руководству, поэтому проверяется
+# именно развилка: кто спросил и про что. Сам отчёт собирает `core.reports`
+# и он проверен в test_reports.py — здесь он подменён заглушкой.
+
+
+@pytest.fixture
+def report(monkeypatch):
+    """Заглушка отчёта: запоминает, о чём спросили."""
+    asked: list[tuple[str, str]] = []
+
+    async def fake_report(question, external_id):
+        asked.append((question, external_id))
+        return "отчёт: 42 обращения"
+
+    monkeypatch.setattr(telegram, "report_for", fake_report)
+    return asked
+
+
+@pytest.fixture
+def owner(monkeypatch):
+    monkeypatch.setattr(settings, "OWNER_TELEGRAM_IDS", str(TG_USER), raising=False)
+
+
+async def test_owner_asking_for_a_report_gets_a_report(core, report, owner):
+    answer = await telegram.answer_for(make_message("нужен отчёт за эту неделю"))
+
+    assert answer == "отчёт: 42 обращения"
+    assert report[0] == ("нужен отчёт за эту неделю", str(TG_USER))
+    assert core == [], "просьба об отчёте не должна заводить диалог клиента"
+
+
+async def test_owner_can_still_test_the_bot_as_a_client(core, report, owner):
+    """Руководитель проверяет бота на своём же вопросе про вклад — и должен
+    получить ответ по документам, а не сводку."""
+    answer = await telegram.answer_for(make_message("Фоизи амонат чанд аст?"))
+
+    assert answer == "эхо: Фоизи амонат чанд аст?"
+    assert report == []
+
+
+async def test_client_asking_for_statistics_gets_no_numbers(core, report, monkeypatch):
+    """ГЛАВНАЯ ПРОВЕРКА ЭТОГО БЛОКА. Бот публичный: его находят по имени и
+    пишут без приглашения. Клиент, написавший «дай статистику», обязан
+    попасть в обычный поиск по документам, а не получить обороты банка."""
+    monkeypatch.setattr(settings, "OWNER_TELEGRAM_IDS", "999999", raising=False)
+
+    answer = await telegram.answer_for(make_message("дай статистику за июнь"))
+
+    assert report == []
+    assert answer == "эхо: дай статистику за июнь"
+
+
+async def test_report_command_from_a_stranger_is_refused_with_his_id(
+    core, report, monkeypatch
+):
+    """Отказ показывает его же id: иначе администратору стенда нечего
+    вписать в OWNER_TELEGRAM_IDS. Цифр в отказе нет."""
+    monkeypatch.setattr(settings, "OWNER_TELEGRAM_IDS", "", raising=False)
+
+    answer = await telegram.answer_for(make_message("/report"))
+
+    assert str(TG_USER) in answer
+    assert report == []
+    assert core == [], "команда не должна уходить в поиск по базе знаний"
+
+
+async def test_report_command_without_a_period_asks_for_the_week(core, report, owner):
+    answer = await telegram.answer_for(make_message("/report"))
+
+    assert answer == "отчёт: 42 обращения"
+    assert report[0][0] == telegram.REPORT_DEFAULT_ASK
+
+
+async def test_report_command_carries_the_period(core, report, owner):
+    """`/report за июнь` — команда для тех, кто не помнит формулировок."""
+    await telegram.answer_for(make_message("/report за июнь"))
+
+    assert report[0][0] == "за июнь"
+
+
+# ---------------------------------------------------------------------------
 # вебхук
 # ---------------------------------------------------------------------------
 

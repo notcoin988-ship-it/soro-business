@@ -13,6 +13,7 @@ import {
 } from "../lib/api";
 import { useLang } from "../lib/lang";
 import { Empty, Failed } from "../components/State";
+import OperatorAI from "../components/OperatorAI";
 
 // Экран 06 «Инбокс оператора» (раздел 8.3 ТЗ).
 //
@@ -361,6 +362,14 @@ export default function Inbox() {
               </div>
 
               <div className="convfoot">
+                {/* Разбор диалога стоит ВЫШЕ фрагментов: оператор сперва
+                    должен понять, о чём разговор и что делать, и только
+                    потом читать выдержки из документов. */}
+                <OperatorAI
+                  card={card}
+                  onInsert={(text) => setDraft((draft ? draft + "\n\n" : "") + text)}
+                />
+
                 <div className="eyebrow">Подсказка оператору</div>
                 {card.hint.length === 0 ? (
                   <div className="substat">

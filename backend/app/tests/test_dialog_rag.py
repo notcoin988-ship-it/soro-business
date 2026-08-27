@@ -168,13 +168,16 @@ async def test_unavailable_model_does_not_leak_traceback(session, knowledge, sor
     """
     soro.stop()
 
-    reply = await send(session, "Фоизи амонати «Ояндасоз» чанд аст?")
+    question = "Фоизи амонати «Ояндасоз» чанд аст?"
+    reply = await send(session, question)
 
     assert reply is not None
     assert reply.escalated
     assert reply.reason == "llm_unavailable"
     assert "Traceback" not in reply.text
-    assert reply.text == dialog.LLM_DOWN_REPLY
+    # вопрос таджикский — и извинение приходит на таджикском, без русского
+    # дубля: см. `dialog.in_language`
+    assert reply.text == dialog.LLM_DOWN_REPLIES["tg"]
 
 
 # ---------------------------------------------------------------------------

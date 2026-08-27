@@ -25,6 +25,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
+from contextlib import suppress
 
 import redis.asyncio as aioredis
 
@@ -51,13 +52,30 @@ def on(channel: str, deliver: Callable[[dict], None]) -> None:
     _local[channel] = deliver
 
 
+def _alive() -> bool:
+    """Работает ли подписчик В ЭТОМ цикле событий.
+
+    Проверка цикла не перестраховка: `TestClient` из FastAPI поднимает
+    приложение со своим циклом в отдельном потоке, и после его закрытия
+    оставался включённый флаг и задача от мёртвого цикла. Следующий тест
+    честно публиковал в Redis, слушать было некому, и событие пропадало —
+    два теста виджета падали по таймауту через раз.
+    """
+    if not _running or _task is None or _task.done():
+        return False
+    try:
+        return _task.get_loop() is asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+
+
 async def publish(channel: str, payload: dict) -> None:
     """Разослать событие всем процессам.
 
     Асинхронная: у Redis-клиента здесь async-интерфейс, и звать его из
     обработчика запроса надо не блокируя цикл.
     """
-    if not _running:
+    if not _alive():
         _deliver(channel, payload)
         return
 
@@ -117,8 +135,14 @@ async def start() -> None:
 
 
 async def stop() -> None:
+    """Погасить подписчика. Порядок важен: сначала снимаем задачу и ждём
+    её конца, и только потом сбрасываем флаг. Наоборот — гонка: задача
+    успевала подключиться и снова поднять флаг уже после остановки."""
     global _task, _running
+
+    task, _task = _task, None
+    if task is not None:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
     _running = False
-    if _task is not None:
-        _task.cancel()
-        _task = None

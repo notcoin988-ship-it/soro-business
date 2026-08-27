@@ -62,7 +62,7 @@ const OMNI: Beat[] = [
     dev: "Web",
     cls: "sys",
     html:
-      "21:05 · Далер авторизовался на eskhata.tj — история подтянулась из " +
+      "21:05 · Далер авторизовался на сайте банка — история подтянулась из " +
       "Telegram",
     step: 2,
     wake: "Web",
@@ -159,14 +159,14 @@ const DEVICES: { id: Dev; icon: string; color: string; title: string; where: str
       id: "Tg",
       icon: "TG",
       color: "var(--tg)",
-      title: "Telegram · @EskhataDemoBot",
+      title: "Telegram · демо-бот",
       where: "телефон",
     },
     {
       id: "Web",
       icon: "W",
       color: "var(--rose)",
-      title: "Виджет на eskhata.tj",
+      title: "Виджет на сайте банка",
       where: "компьютер",
     },
     {
@@ -187,7 +187,7 @@ const STEPS = [
   {
     n: 2,
     title: "Продолжение на сайте",
-    hint: "вечером открывает eskhata.tj — виджет помнит диалог",
+    hint: "вечером открывает сайт банка — виджет помнит диалог",
   },
   {
     n: 3,
@@ -414,14 +414,35 @@ export default function Omni() {
     <>
       <div className="head">
         <div>
+          {/* Формулировка про «три экрана» описывала механику. Банк
+              покупает не механику, а то, что клиент не пересказывает свою
+              проблему заново каждому каналу и каждому оператору. */}
           <h1>
-            Омниканальность · <em>один диалог, три экрана</em>
+            Один клиент. Один разговор. <em>Любой канал</em>
           </h1>
           <p>
             Клиент начинает в Telegram по дороге, продолжает на сайте с
-            компьютера — и попадает к оператору со всей историей. Ни один канал
-            не начинает разговор заново.
+            компьютера — и попадает к оператору со всей историей. Контекст
+            переходит между каналами целиком: ни один из них не начинает
+            разговор заново и не просит повторить сказанное.
           </p>
+          <div className="chain" style={{ justifyContent: "flex-start", marginTop: 13, marginBottom: 0 }}>
+            {["Telegram", "Веб-виджет", "Оператор", "Решено"].map((step, index, all) => (
+              <span key={step} style={{ display: "contents" }}>
+                <span
+                  className={`clink ${index === all.length - 1 ? "last" : ""}`}
+                  style={{ opacity: 1, animation: "none", fontSize: 11.5, padding: "6px 12px" }}
+                >
+                  {step}
+                </span>
+                {index < all.length - 1 && (
+                  <span className="carrow" style={{ opacity: 1, animation: "none" }}>
+                    →
+                  </span>
+                )}
+              </span>
+            ))}
+          </div>
         </div>
       </div>
 

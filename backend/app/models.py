@@ -36,7 +36,7 @@ class Workspace(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)  # 'eskhata-demo'
-    name: Mapped[str] = mapped_column(Text, nullable=False)  # 'Банк Эсхата'
+    name: Mapped[str] = mapped_column(Text, nullable=False)  # 'ДЕМО банк'
     # тон, приветствие, языки
     settings: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=sql_text("'{}'::jsonb")

@@ -42,7 +42,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from app.config import settings
-from app.core import context
+from app.core import context, phrases
 from app.core.context import Turn
 from app.core.rag import TOKEN_RE, Hit
 
@@ -104,8 +104,11 @@ SYSTEM_PROMPT = """Ту — Soro, ёрдамчии расмии «{bank_name}».
    текста добавь в конец строку [ESCALATE]. Ответ никогда не
    состоит из одного [ESCALATE] или одной ссылки: клиент
    должен получить связное предложение.
-2. Отвечай на языке вопроса: таджикский -> таджикский,
-   русский -> русский, смешанный -> как удобнее клиенту.
+2. Язык ответа задаёт КЛИЕНТ, а не документы: таджикская
+   реплика -> таджикский, русская -> русский. Фрагменты
+   бывают на другом языке — факты из них переведи.
+   НИКОГДА не пиши один и тот же ответ на двух языках подряд:
+   клиент читает на одном.
 3. После каждого факта ставь ссылку вида [1], [2] — номер
    фрагмента, из которого факт взят.
 4. Никогда не называй данные счетов, карт, балансов —
@@ -119,6 +122,16 @@ SYSTEM_PROMPT = """Ту — Soro, ёрдамчии расмии «{bank_name}».
    прочитал. Если во фрагментах нет ничего сверх сказанного —
    напиши об этом одним предложением, не пересказывая ответ
    заново."""
+
+# Прямое указание языка — дописывается к системному промпту, когда
+# `phrases.detect_language` уверен. Написано на самом этом языке: строка
+# служит модели ещё и образцом, на который она настраивается.
+LANGUAGE_ORDER = {
+    "ru": "ЯЗЫК ОТВЕТА: русский. Клиент написал по-русски — отвечай "
+          "только по-русски, таджикский вариант не добавляй.",
+    "tg": "ЗАБОНИ ҶАВОБ: тоҷикӣ. Мизоҷ бо тоҷикӣ навишт — танҳо бо "
+          "тоҷикӣ ҷавоб деҳ, варианти русиро илова накун.",
+}
 
 # Шаблон пользовательского сообщения — как в ТЗ, дословно.
 #
@@ -359,9 +372,19 @@ def build_messages(
     другие. Оставить их — значит показать модели пример, где [2] означает
     что-то иное, и получить ссылку на чужой документ в новом ответе.
     """
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT.format(bank_name=bank_name)}
-    ]
+    system = SYSTEM_PROMPT.format(bank_name=bank_name)
+
+    # ЯЗЫК ГОВОРИМ ПРЯМО, А НЕ НАДЕЕМСЯ НА ПРАВИЛО 2. Правило есть с самого
+    # начала, и на длинном русском вопросе модель его соблюдает; на короткой
+    # реплике («хочу карту visa») — нет, скатывается в язык этого самого
+    # промпта, а он таджикский. Замер и разбор — в шапке
+    # `phrases.detect_language`. Строка идёт ПОСЛЕДНЕЙ: ближайшее к концу
+    # указание модель держит крепче.
+    language = phrases.detect_language(question)
+    if language:
+        system += "\n" + LANGUAGE_ORDER[language]
+
+    messages = [{"role": "system", "content": system}]
     for turn in context.trim(history or []):
         text = turn.text if turn.role == "user" else strip_citations(turn.text)
         messages.append({"role": turn.role, "content": text})
@@ -414,6 +437,34 @@ def cited_chunk_ids(text: str, hits: list[Hit]) -> list[int]:
                 if chunk_id not in used:
                     used.append(chunk_id)
     return used
+
+
+def split_visible(buffer: str) -> tuple[str, str]:
+    """Накопленный поток → (что можно показать сейчас, что придержать).
+
+    ЗАЧЕМ. `[ESCALATE]` — служебный маркер, клиент его видеть не должен.
+    Из модели он приходит по кускам («[ES», «CAL», «ATE», «]»), и канал,
+    отдающий дельты сразу, показывает маркер по буквам. Заменить его
+    финальным событием уже нельзя: текст на экране, а зритель демо
+    читает его как поломку — так и было на площадке.
+
+    Поэтому хвост, который ЕЩЁ МОЖЕТ оказаться маркером, придерживаем до
+    следующего куска. Придержать можем максимум 9 символов — на глаз в
+    потоке это незаметно.
+
+    Возвращаем остаток отдельно, чтобы вызывающий хранил в буфере только
+    неотданное: иначе уже показанный текст пройдёт через вырезание
+    повторно и продублируется.
+    """
+    text = ESCALATE_RE.sub(" ", buffer)
+    lowered = text.lower()
+    marker = ESCALATE_MARKER.lower()
+    # Самый длинный суффикс, совпавший с началом маркера. Идём от длинного
+    # к короткому: «[ESCALATE» важнее оборвать, чем «[».
+    for size in range(min(len(marker) - 1, len(text)), 0, -1):
+        if lowered.endswith(marker[:size]):
+            return text[:-size], text[-size:]
+    return text, ""
 
 
 def parse_answer(raw: str, hits: list[Hit], question: str) -> tuple[str, bool, str | None]:
@@ -599,6 +650,52 @@ async def stream_answer(
                 piece = (choices[0].get("delta") or {}).get("content")
                 if piece:
                     yield piece
+    finally:
+        if own_client:
+            await client.aclose()
+
+
+async def complete(
+    messages: list[dict],
+    *,
+    max_tokens: int,
+    temperature: float = 0.0,
+    timeout: httpx.Timeout = LLM_TIMEOUT,
+    client: httpx.AsyncClient | None = None,
+) -> str:
+    """Один заход в модель готовыми сообщениями. Без промпта, без разбора.
+
+    ЗАЧЕМ ОТДЕЛЬНО ОТ `answer`. Тот собирает промпт раздела 6.6, ищет в
+    ответе `[ESCALATE]` и считает `chunks_used` — всё это про разговор с
+    клиентом по документам. Отчёт руководителю (`core.reports`) — другая
+    задача: свой системный промпт, ни фрагментов, ни эскалации. Звать
+    `answer` с пустым списком фрагментов значило бы получить ответ по
+    правилам «отвечай только по <docs>», где docs пуст.
+
+    НЕ СТРИМИМ: отчёт — 4–8 строк, живой замер дал 2,9 с целиком и 0,4 с до
+    первой буквы. Стриминг ради трёх секунд добавил бы каналу разбор SSE, а
+    экрану — состояние «печатается».
+
+    Ошибки НЕ глушим: вызывающий решает, что делать. У `reports` на этот
+    случай есть сводка цифрами без пересказа.
+    """
+    payload = {
+        "model": settings.SORO_MODEL,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stream": False,
+    }
+    url = settings.SORO_API_URL.rstrip("/") + "/chat/completions"
+    headers = {"Authorization": f"Bearer {settings.SORO_API_KEY}"}
+
+    own_client = client is None
+    if own_client:
+        client = httpx.AsyncClient(timeout=timeout)
+    try:
+        response = await client.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"] or ""
     finally:
         if own_client:
             await client.aclose()
